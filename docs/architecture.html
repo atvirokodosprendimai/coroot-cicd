@@ -9,6 +9,11 @@
   body { background-color: #151515; color: #ddd; }
   code { background: #1a1a1a; padding: 0.1em 0.3em; border-radius: 2px; }
   pre > code { background: #1a1a1a; padding: 1rem; border-radius: 2px; }
+  table { border-top: 2px solid #666; border-bottom: 2px solid #666; }
+  th { border-bottom: 1px solid #444; font-weight: normal; padding: 0.5em 0.6em; text-align: left; }
+  td { padding: 0.4em 0.6em; border: none; }
+  a { color: inherit; }
+  .margin-figure svg text { font-family: et-book, Palatino, Georgia, serif; }
 </style>
 </head>
 <body>
@@ -18,24 +23,62 @@
 <p class="subtitle"><a href="index.html">&larr; Coroot CI/CD</a></p>
 
 <section>
-<p><span class="newthought">The diagram below</span> shows the complete system: GitHub
-CI/CD infrastructure on the left, the Hetzner VPS with its Docker stack in the center,
-and external services on the right.<label for="sn-d2" class="margin-toggle sidenote-number"></label><input
-type="checkbox" id="sn-d2" class="margin-toggle"/><span class="sidenote">Generated from
-<code>docs/architecture.d2</code> using <a href="https://d2lang.com">D2</a> with the ELK
-layout engine and post-processed to a neutral greyscale palette. D2 is a declarative
-diagramming language&mdash;the source reads like a description of the system rather than
-coordinates and drawing commands.</span>
-Dashed lines indicate conditional or optional paths; the dashed line from Deploy to
-Rollback fires only on failure.</p>
+<p><span class="newthought">The system has three tiers.</span><label
+for="mn-diagram" class="margin-toggle">&#8853;</label><input type="checkbox"
+id="mn-diagram" class="margin-toggle"/><span class="marginnote"><svg class="margin-figure"
+viewBox="0 0 160 340" width="160" height="340" aria-label="System topology">
+<rect x="20" y="4" width="120" height="36" rx="2" fill="none" stroke="#888" stroke-width="1"/>
+<text x="80" y="26" text-anchor="middle" fill="#ccc" font-size="12">GitHub Actions</text>
+<line x1="80" y1="40" x2="80" y2="64" stroke="#888" stroke-width="1" marker-end="url(#ma)"/>
+<text x="100" y="55" fill="#777" font-size="9" font-style="italic">SSH</text>
+<rect x="10" y="64" width="140" height="120" rx="2" fill="none" stroke="#888" stroke-width="1"/>
+<text x="80" y="82" text-anchor="middle" fill="#ccc" font-size="12">Hetzner VPS</text>
+<rect x="24" y="92" width="112" height="82" rx="2" fill="none" stroke="#666" stroke-width="1" stroke-dasharray="3,2"/>
+<text x="80" y="108" text-anchor="middle" fill="#999" font-size="10">Docker</text>
+<text x="80" y="124" text-anchor="middle" fill="#888" font-size="9">Caddy &rarr; Coroot</text>
+<text x="80" y="138" text-anchor="middle" fill="#888" font-size="9">Prometheus</text>
+<text x="80" y="152" text-anchor="middle" fill="#888" font-size="9">ClickHouse</text>
+<text x="80" y="166" text-anchor="middle" fill="#888" font-size="9">Node &amp; Cluster Agents</text>
+<line x1="80" y1="184" x2="80" y2="208" stroke="#888" stroke-width="1" marker-end="url(#ma)"/>
+<text x="100" y="199" fill="#777" font-size="9" font-style="italic">HTTPS</text>
+<rect x="10" y="208" width="140" height="36" rx="2" fill="none" stroke="#888" stroke-width="1"/>
+<text x="80" y="230" text-anchor="middle" fill="#ccc" font-size="12">table.beerpub.dev</text>
+<line x1="80" y1="244" x2="80" y2="264" stroke="#888" stroke-width="1" stroke-dasharray="3,2"/>
+<text x="100" y="257" fill="#777" font-size="9" font-style="italic">DNS</text>
+<rect x="20" y="264" width="120" height="36" rx="2" fill="none" stroke="#888" stroke-width="1"/>
+<text x="80" y="286" text-anchor="middle" fill="#ccc" font-size="12">Cloudflare</text>
+<line x1="150" y1="160" x2="150" y2="316" stroke="#888" stroke-width="1" stroke-dasharray="3,2"/>
+<line x1="150" y1="316" x2="130" y2="316" stroke="#888" stroke-width="1" marker-end="url(#ma)"/>
+<text x="158" y="240" fill="#777" font-size="9" font-style="italic" transform="rotate(90,158,240)">rsync</text>
+<rect x="20" y="300" width="120" height="36" rx="2" fill="none" stroke="#888" stroke-width="1"/>
+<text x="80" y="322" text-anchor="middle" fill="#ccc" font-size="12">Storage Box</text>
+<defs><marker id="ma" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M 0 1 L 8 5 L 0 9 z" fill="#888"/></marker></defs>
+</svg>
+System topology. The full <a href="architecture.d2">D2 source</a>
+contains all node-level connections.</span>
+GitHub Actions deploys over SSH to a Hetzner VPS running six Docker containers.
+Users reach the stack through Cloudflare DNS and Caddy's reverse proxy at
+<code>https://table.beerpub.dev</code>. Backups sync to a Hetzner Storage Box
+via rsync on port 23.</p>
 
-<figure class="fullwidth">
-  <img src="architecture.svg" alt="Coroot CI/CD Architecture Diagram" style="width:100%">
-</figure>
+<p>The production Docker stack consists of six services, all communicating within
+a single Docker network. Only Caddy binds to host ports 80 and 443; the remaining
+five services use <code>expose:</code> and are reachable only through Caddy or
+within the container network.</p>
 
-<p>To regenerate after editing the source:</p>
-<pre><code>d2 --theme 200 --layout elk --pad 40 docs/architecture.d2 docs/architecture.svg
-# Then post-process: replace Catppuccin palette with neutral greys</code></pre>
+<table>
+  <thead>
+    <tr><th>Service</th><th>Image</th><th>Role</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Caddy</td><td><code>caddy:2</code></td><td>Reverse proxy, auto-TLS</td></tr>
+    <tr><td>Coroot</td><td><code>ghcr.io/coroot/coroot</code></td><td>Observability platform</td></tr>
+    <tr><td>Prometheus</td><td><code>prom/prometheus:v2.53.5</code></td><td>Metrics storage</td></tr>
+    <tr><td>ClickHouse</td><td><code>clickhouse-server:24.3</code></td><td>Logs, traces, profiles</td></tr>
+    <tr><td>Node Agent</td><td><code>ghcr.io/coroot/coroot-node-agent</code></td><td>eBPF host metrics</td></tr>
+    <tr><td>Cluster Agent</td><td><code>ghcr.io/coroot/coroot-cluster-agent</code></td><td>Metrics scraper</td></tr>
+  </tbody>
+</table>
 </section>
 
 <section>
