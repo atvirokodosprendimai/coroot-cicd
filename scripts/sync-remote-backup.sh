@@ -121,22 +121,36 @@ backup_size=$(du -sh "${BACKUP_TO_SYNC}" | cut -f1)
 echo "Backup to sync: ${BACKUP_NAME} (${backup_size})"
 echo ""
 
-# Test SSH connectivity
+# Hetzner Storage Boxes do NOT provide a shell. They only support:
+#   - SFTP (for listing, mkdir, rm)
+#   - rsync over SSH
+#   - SCP
+# All remote operations must use sftp/rsync, not ssh commands.
+
+RSYNC_RSH="ssh ${SSH_OPTS}"
+
+# Helper: run SFTP commands on the storage box
+sftp_cmd() {
+  sftp -P "${STORAGEBOX_PORT}" -i "${STORAGEBOX_KEY}" \
+    -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
+    "${STORAGEBOX_USER}@${STORAGEBOX_HOST}" <<< "$1" 2>/dev/null
+}
+
+# Test connectivity via SFTP
 echo "--- Testing remote connectivity ---"
-if ssh ${SSH_OPTS} "${STORAGEBOX_USER}@${STORAGEBOX_HOST}" "echo 'Connection OK'" 2>/dev/null; then
-  echo "  Remote connection successful"
+if sftp_cmd "ls" > /dev/null 2>&1; then
+  echo "  Remote connection successful (SFTP)"
 else
-  echo "  ERROR: Could not connect to ${STORAGEBOX_HOST}"
+  echo "  ERROR: Could not connect to ${STORAGEBOX_HOST} via SFTP"
   echo "  Check STORAGEBOX_USER, STORAGEBOX_HOST, and SSH key configuration."
   exit 1
 fi
 echo ""
 
-# Create remote directory structure
+# Create remote directory structure via SFTP
 echo "--- Ensuring remote directory exists ---"
-ssh ${SSH_OPTS} "${STORAGEBOX_USER}@${STORAGEBOX_HOST}" \
-  "mkdir -p ${STORAGEBOX_PATH}" 2>/dev/null || true
-echo "  Remote directory ready"
+sftp_cmd "mkdir ${STORAGEBOX_PATH}" > /dev/null 2>&1 || true
+echo "  Remote directory ready: ${STORAGEBOX_PATH}"
 echo ""
 
 if [[ "${DRY_RUN}" == true ]]; then
@@ -147,27 +161,26 @@ if [[ "${DRY_RUN}" == true ]]; then
 
   echo "--- DRY RUN: Files that would be transferred ---"
   rsync -avz --dry-run \
-    -e "ssh ${SSH_OPTS}" \
+    -e "${RSYNC_RSH}" \
     "${BACKUP_TO_SYNC}/" \
-    "${REMOTE_DEST}/${BACKUP_NAME}/" 2>/dev/null || echo "  (rsync dry-run failed — check connectivity)"
+    "${REMOTE_DEST}/${BACKUP_NAME}/" 2>&1 | sed 's/^/  /' || echo "  (rsync dry-run failed — check connectivity)"
   echo ""
 
-  echo "--- DRY RUN: Would prune remote backups (keeping last ${MAX_REMOTE_BACKUPS}) ---"
-  remote_backups=$(ssh ${SSH_OPTS} "${STORAGEBOX_USER}@${STORAGEBOX_HOST}" \
-    "ls -1d ${STORAGEBOX_PATH}/[0-9]* 2>/dev/null" 2>/dev/null || true)
-  remote_count=$(echo "${remote_backups}" | grep -c '[0-9]' || echo "0")
-  echo "  Current remote backups: ${remote_count}"
+  echo "--- DRY RUN: Current remote backups ---"
+  remote_listing=$(sftp_cmd "ls ${STORAGEBOX_PATH}" 2>/dev/null || true)
+  remote_count=$(echo "${remote_listing}" | grep -c '[0-9]\{8\}-[0-9]\{6\}' || echo "0")
+  echo "  Remote backups: ${remote_count} (max retained: ${MAX_REMOTE_BACKUPS})"
   echo ""
   echo "=== DRY RUN COMPLETE — no data transferred ==="
   exit 0
 fi
 
-# Sync the backup
+# Sync the backup via rsync
 echo "--- Syncing backup to remote ---"
 echo "  ${BACKUP_TO_SYNC}/ -> ${REMOTE_DEST}/${BACKUP_NAME}/"
 
 if rsync -avz --progress \
-  -e "ssh ${SSH_OPTS}" \
+  -e "${RSYNC_RSH}" \
   "${BACKUP_TO_SYNC}/" \
   "${REMOTE_DEST}/${BACKUP_NAME}/"; then
   echo ""
@@ -179,10 +192,11 @@ else
 fi
 echo ""
 
-# Prune old remote backups (keep last MAX_REMOTE_BACKUPS)
+# Prune old remote backups via SFTP (keep last MAX_REMOTE_BACKUPS)
 echo "--- Pruning old remote backups (keeping last ${MAX_REMOTE_BACKUPS}) ---"
-remote_backups=$(ssh ${SSH_OPTS} "${STORAGEBOX_USER}@${STORAGEBOX_HOST}" \
-  "ls -1d ${STORAGEBOX_PATH}/[0-9]* 2>/dev/null | sort" 2>/dev/null || true)
+# List backup directories (format: YYYYMMDD-HHMMSS)
+remote_listing=$(sftp_cmd "ls ${STORAGEBOX_PATH}" 2>/dev/null || true)
+remote_backups=$(echo "${remote_listing}" | grep -oE '[0-9]{8}-[0-9]{6}' | sort || true)
 
 if [[ -n "${remote_backups}" ]]; then
   remote_count=$(echo "${remote_backups}" | wc -l | tr -d '[:space:]')
@@ -191,10 +205,17 @@ if [[ -n "${remote_backups}" ]]; then
   if [[ ${remote_count} -gt ${MAX_REMOTE_BACKUPS} ]]; then
     prune_count=$((remote_count - MAX_REMOTE_BACKUPS))
     echo "  Pruning ${prune_count} old backup(s)..."
-    echo "${remote_backups}" | head -n "${prune_count}" | while read -r old_backup; do
-      echo "    Removing: ${old_backup}"
-      ssh ${SSH_OPTS} "${STORAGEBOX_USER}@${STORAGEBOX_HOST}" \
-        "rm -rf ${old_backup}" 2>/dev/null || true
+    echo "${remote_backups}" | head -n "${prune_count}" | while read -r old_name; do
+      echo "    Removing: ${STORAGEBOX_PATH}/${old_name}"
+      # SFTP rm is not recursive; use a batch of commands to remove contents then dir
+      # rsync --delete with an empty dir is the most reliable way on storage boxes
+      empty_dir=$(mktemp -d)
+      rsync -a --delete \
+        -e "${RSYNC_RSH}" \
+        "${empty_dir}/" \
+        "${REMOTE_DEST}/${old_name}/" 2>/dev/null || true
+      sftp_cmd "rmdir ${STORAGEBOX_PATH}/${old_name}" > /dev/null 2>&1 || true
+      rmdir "${empty_dir}" 2>/dev/null || true
     done
   else
     echo "  No pruning needed (${remote_count}/${MAX_REMOTE_BACKUPS})"
@@ -204,11 +225,10 @@ else
 fi
 echo ""
 
-# Verify the upload
+# Verify the upload via SFTP
 echo "--- Verifying remote backup ---"
-remote_files=$(ssh ${SSH_OPTS} "${STORAGEBOX_USER}@${STORAGEBOX_HOST}" \
-  "ls -lh ${STORAGEBOX_PATH}/${BACKUP_NAME}/ 2>/dev/null" || echo "VERIFICATION FAILED")
-echo "${remote_files}" | sed 's/^/  /'
+verify_output=$(sftp_cmd "ls -l ${STORAGEBOX_PATH}/${BACKUP_NAME}/" 2>/dev/null || echo "VERIFICATION FAILED")
+echo "${verify_output}" | sed 's/^/  /'
 echo ""
 
 echo "=== REMOTE BACKUP SYNC COMPLETE ==="
