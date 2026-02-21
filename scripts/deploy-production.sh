@@ -89,33 +89,40 @@ if [[ "${all_healthy}" != true ]]; then
 fi
 
 # HTTP endpoint probes
-echo "--- Running HTTP health probes ---"
+# Production services use 'expose:' (not 'ports:'), so they're only reachable
+# inside the Docker network. We use 'docker exec' for internal probes and
+# curl for the external Caddy endpoint.
+echo "--- Running health probes ---"
 probes_passed=true
 
-check_endpoint() {
-  local name="$1"
-  local url="$2"
-  local code
+# Internal probes via docker exec (services don't bind to host localhost)
+echo "  Internal probes (via docker exec):"
+for probe in "coroot-coroot-1|http://localhost:8080/|Coroot" \
+             "coroot-prometheus-1|http://localhost:9090/-/healthy|Prometheus" \
+             "coroot-clickhouse-1|http://localhost:8123/ping|ClickHouse"; do
+  container=$(echo "${probe}" | cut -d'|' -f1)
+  url=$(echo "${probe}" | cut -d'|' -f2)
+  name=$(echo "${probe}" | cut -d'|' -f3)
 
-  code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 10 "${url}" 2>/dev/null || echo "000")
+  code=$(docker exec "${container}" wget -q -O /dev/null --spider "${url}" 2>&1 && echo "200" || echo "FAIL")
   if [[ "${code}" == "200" ]]; then
-    echo "  ${name}: HTTP ${code} — PASS"
-    return 0
+    echo "    ${name}: PASS"
   else
-    echo "  ${name}: HTTP ${code} — FAIL"
+    echo "    ${name}: FAIL"
     probes_passed=false
-    return 1
   fi
-}
+done
 
-check_endpoint "Coroot (internal)" "http://localhost:8080/" || true
-check_endpoint "Prometheus" "http://localhost:9090/-/healthy" || true
-check_endpoint "ClickHouse" "http://localhost:8123/ping" || true
-
-# External check via Caddy
+# External probe via Caddy (uses curl from the host)
 echo ""
-echo "--- External endpoint check ---"
-check_endpoint "Coroot (external via Caddy)" "${EXTERNAL_URL}/" || true
+echo "  External probe (via Caddy):"
+ext_code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 10 --max-time 15 "${EXTERNAL_URL}/" 2>/dev/null || echo "000")
+if [[ "${ext_code}" == "200" ]]; then
+  echo "    Coroot (${EXTERNAL_URL}): HTTP ${ext_code} — PASS"
+else
+  echo "    Coroot (${EXTERNAL_URL}): HTTP ${ext_code} — FAIL"
+  probes_passed=false
+fi
 echo ""
 
 # Show post-update image info

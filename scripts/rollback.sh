@@ -149,27 +149,25 @@ done
 
 echo ""
 
-# Verify with HTTP probes
+# Verify with HTTP probes via docker exec (services use 'expose:', not 'ports:')
 echo "--- Post-rollback health probes ---"
 probes_passed=true
 
-check_endpoint() {
-  local name="$1"
-  local url="$2"
-  local code
+for probe in "coroot-coroot-1|http://localhost:8080/|Coroot" \
+             "coroot-prometheus-1|http://localhost:9090/-/healthy|Prometheus" \
+             "coroot-clickhouse-1|http://localhost:8123/ping|ClickHouse"; do
+  container=$(echo "${probe}" | cut -d'|' -f1)
+  url=$(echo "${probe}" | cut -d'|' -f2)
+  name=$(echo "${probe}" | cut -d'|' -f3)
 
-  code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 10 "${url}" 2>/dev/null || echo "000")
+  code=$(docker exec "${container}" wget -q -O /dev/null --spider "${url}" 2>&1 && echo "200" || echo "FAIL")
   if [[ "${code}" == "200" ]]; then
-    echo "  ${name}: HTTP ${code} — PASS"
+    echo "  ${name}: PASS"
   else
-    echo "  ${name}: HTTP ${code} — FAIL"
+    echo "  ${name}: FAIL"
     probes_passed=false
   fi
-}
-
-check_endpoint "Coroot" "http://localhost:8080/"
-check_endpoint "Prometheus" "http://localhost:9090/-/healthy"
-check_endpoint "ClickHouse" "http://localhost:8123/ping"
+done
 echo ""
 
 # Show current container status
