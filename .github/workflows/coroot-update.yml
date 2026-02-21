@@ -222,7 +222,7 @@ jobs:
   rollback:
     name: Rollback on Failure
     needs: deploy
-    if: failure()
+    if: ${{ always() && needs.deploy.result == 'failure' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -236,6 +236,7 @@ jobs:
           ssh-keyscan -H ${{ env.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
 
       - name: Execute rollback
+        id: rollback_exec
         run: |
           echo "Production deployment failed. Initiating rollback..."
           ssh -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no \
@@ -244,7 +245,7 @@ jobs:
       - name: Rollback summary
         if: always()
         run: |
-          if [[ "${{ steps.*.outcome }}" == *"failure"* ]]; then
+          if [[ "${{ steps.rollback_exec.outcome }}" == "failure" ]]; then
             echo "### ROLLBACK FAILED" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "**CRITICAL**: Both deployment and rollback failed." >> $GITHUB_STEP_SUMMARY

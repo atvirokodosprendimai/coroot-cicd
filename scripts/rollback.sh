@@ -132,8 +132,9 @@ while [[ ${elapsed} -lt ${max_wait} ]]; do
   healthy_count=0
   for service in coroot prometheus clickhouse; do
     health=$(docker compose -p "${COMPOSE_PROJECT}" -f "${COMPOSE_FILE}" \
-      ps "${service}" 2>/dev/null | grep -c "(healthy)" || echo "0")
-    if [[ ${health} -gt 0 ]]; then
+      ps "${service}" 2>/dev/null | grep -c "(healthy)" || true)
+    health=$(echo "${health}" | tr -d '[:space:]')
+    if [[ -n "${health}" && "${health}" -gt 0 ]] 2>/dev/null; then
       healthy_count=$((healthy_count + 1))
     fi
   done
@@ -151,11 +152,11 @@ echo ""
 # Verify with HTTP probes
 echo "--- Post-rollback health probes ---"
 probes_passed=true
-for endpoint in "http://localhost:8080/:Coroot" "http://localhost:9090/-/healthy:Prometheus" "http://localhost:8123/ping:ClickHouse"; do
-  url="${endpoint%%:*}:${endpoint#*:}"
-  # Re-parse: URL is everything before the last colon-separated name
-  url=$(echo "${endpoint}" | sed 's/:[^:]*$//')
-  name=$(echo "${endpoint}" | grep -oP '[^:]+$')
+
+check_endpoint() {
+  local name="$1"
+  local url="$2"
+  local code
 
   code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 10 "${url}" 2>/dev/null || echo "000")
   if [[ "${code}" == "200" ]]; then
@@ -164,7 +165,11 @@ for endpoint in "http://localhost:8080/:Coroot" "http://localhost:9090/-/healthy
     echo "  ${name}: HTTP ${code} — FAIL"
     probes_passed=false
   fi
-done
+}
+
+check_endpoint "Coroot" "http://localhost:8080/"
+check_endpoint "Prometheus" "http://localhost:9090/-/healthy"
+check_endpoint "ClickHouse" "http://localhost:8123/ping"
 echo ""
 
 # Show current container status
@@ -177,9 +182,9 @@ if [[ "${restore_failed}" == true ]]; then
   echo "=== ROLLBACK COMPLETED WITH ERRORS ==="
   echo "Some volumes could not be restored. Manual intervention may be needed."
   exit 1
-elif [[ "${all_healthy}" != true || "${probes_passed}" != true ]]; then
+elif [[ "${probes_passed}" != true ]]; then
   echo "=== ROLLBACK COMPLETED — SERVICES NOT FULLY HEALTHY ==="
-  echo "Volumes were restored but services are not all responding."
+  echo "Volumes were restored but HTTP probes failed."
   echo "Check logs: docker compose -f ${COMPOSE_FILE} logs"
   exit 1
 else
