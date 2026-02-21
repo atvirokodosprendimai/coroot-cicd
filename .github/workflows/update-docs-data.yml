@@ -1,0 +1,76 @@
+name: Update Docs Data
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'docs/data/**'
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_run:
+    workflows: ["Coroot Stack Auto-Update"]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-pipeline-data:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch pipeline run data
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p docs/data
+
+          # Fetch last 20 runs of the coroot-update workflow
+          gh api "repos/${{ github.repository }}/actions/workflows/coroot-update.yml/runs?per_page=20" \
+            --jq '{
+              generated_at: (now | todate),
+              runs: [.workflow_runs[] | {
+                id: .id,
+                run_number: .run_number,
+                status: .status,
+                conclusion: .conclusion,
+                created_at: .created_at,
+                updated_at: .updated_at,
+                event: .event,
+                html_url: .html_url
+              }]
+            }' > /tmp/runs.json
+
+          # Enrich each run with job details
+          for run_id in $(jq -r '.runs[].id' /tmp/runs.json); do
+            jobs=$(gh api "repos/${{ github.repository }}/actions/runs/${run_id}/jobs" \
+              --jq '[.jobs[] | {
+                name: .name,
+                status: .status,
+                conclusion: .conclusion,
+                started_at: .started_at,
+                completed_at: .completed_at
+              }]' 2>/dev/null || echo '[]')
+
+            # Merge jobs into the run
+            jq --argjson jobs "$jobs" --argjson rid "$run_id" \
+              '.runs |= map(if .id == $rid then . + {jobs: $jobs} else . end)' \
+              /tmp/runs.json > /tmp/runs_tmp.json
+            mv /tmp/runs_tmp.json /tmp/runs.json
+          done
+
+          cp /tmp/runs.json docs/data/pipeline-runs.json
+
+      - name: Commit if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/data/pipeline-runs.json
+          if git diff --cached --quiet; then
+            echo "No changes to pipeline data"
+          else
+            git commit -m "Update pipeline run data [skip ci]"
+            git push
+          fi
