@@ -1,0 +1,149 @@
+# Staging stack for validating Coroot updates before production deployment.
+# Runs on the same VPS with separate volumes and internal-only ports.
+# No Caddy — accessed only via localhost for health checks.
+#
+# Usage:
+#   docker compose -p coroot-staging -f docker-compose.staging.yml up -d
+#   docker compose -p coroot-staging -f docker-compose.staging.yml down -v
+
+services:
+  coroot:
+    restart: "no"
+    image: ghcr.io/coroot/coroot
+    pull_policy: always
+    user: root
+    volumes:
+      - staging_coroot_data:/data
+    ports:
+      - "127.0.0.1:8081:8080"
+    command:
+      - "--data-dir=/data"
+      - "--bootstrap-prometheus-url=http://prometheus:9090"
+      - "--bootstrap-refresh-interval=15s"
+      - "--bootstrap-clickhouse-address=clickhouse:9000"
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  node-agent:
+    restart: "no"
+    image: ghcr.io/coroot/coroot-node-agent
+    pull_policy: always
+    privileged: true
+    pid: "host"
+    volumes:
+      - /sys/kernel/tracing:/sys/kernel/tracing
+      - /sys/kernel/debug:/sys/kernel/debug
+      - /sys/fs/cgroup:/host/sys/fs/cgroup
+      - staging_node_agent_data:/data
+    command:
+      - "--collector-endpoint=http://coroot:8080"
+      - "--cgroupfs-root=/host/sys/fs/cgroup"
+      - "--wal-dir=/data"
+
+  cluster-agent:
+    restart: "no"
+    image: ghcr.io/coroot/coroot-cluster-agent
+    pull_policy: always
+    volumes:
+      - staging_cluster_agent_data:/data
+    command:
+      - "--coroot-url=http://coroot:8080"
+      - "--metrics-scrape-interval=15s"
+      - "--metrics-wal-dir=/data"
+    depends_on:
+      - coroot
+
+  prometheus:
+    restart: "no"
+    image: prom/prometheus:v2.53.5
+    volumes:
+      - staging_prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
+      - "--web.console.templates=/usr/share/prometheus/consoles"
+      - "--web.enable-lifecycle"
+      - "--web.enable-remote-write-receiver"
+    ports:
+      - "127.0.0.1:9091:9090"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 3s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  clickhouse:
+    restart: "no"
+    image: clickhouse/clickhouse-server:24.3
+    environment:
+      CLICKHOUSE_SKIP_USER_SETUP: "1"
+    volumes:
+      - staging_clickhouse_data:/var/lib/clickhouse
+      - staging_clickhouse_logs:/var/log/clickhouse-server
+    ports:
+      - "127.0.0.1:8124:8123"
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    configs:
+      - source: clickhouse_logging
+        target: /etc/clickhouse-server/config.d/logging_rules.xml
+      - source: clickhouse_user_logging
+        target: /etc/clickhouse-server/config.d/user_logging.xml
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8123/ping"]
+      interval: 3s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  staging_coroot_data:
+  staging_prometheus_data:
+  staging_clickhouse_data:
+  staging_clickhouse_logs:
+  staging_node_agent_data:
+  staging_cluster_agent_data:
+
+configs:
+  clickhouse_logging:
+    content: |
+      <clickhouse>
+        <logger>
+            <level>warning</level>
+            <console>true</console>
+        </logger>
+        <query_thread_log remove="remove"/>
+        <query_log remove="remove"/>
+        <text_log remove="remove"/>
+        <trace_log remove="remove"/>
+        <metric_log remove="remove"/>
+        <asynchronous_metric_log remove="remove"/>
+        <session_log remove="remove"/>
+        <part_log remove="remove"/>
+        <latency_log remove="remove"/>
+        <processors_profile_log remove="remove"/>
+      </clickhouse>
+  clickhouse_user_logging:
+    content: |
+      <clickhouse>
+        <profiles>
+          <default>
+            <log_queries>0</log_queries>
+            <log_query_threads>0</log_query_threads>
+            <log_processors_profiles>0</log_processors_profiles>
+          </default>
+        </profiles>
+      </clickhouse>

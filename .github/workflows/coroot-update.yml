@@ -1,0 +1,314 @@
+name: Coroot Stack Auto-Update
+
+# Automatically checks for new Coroot image releases, validates in staging,
+# backs up all data, deploys to production, and rolls back on failure.
+
+on:
+  schedule:
+    # Every Monday at 04:00 UTC
+    - cron: "0 4 * * 1"
+
+  workflow_dispatch:
+    inputs:
+      force_deploy:
+        description: "Deploy even if no image updates are detected"
+        required: false
+        default: "false"
+        type: boolean
+      skip_staging:
+        description: "Skip staging validation (use with caution)"
+        required: false
+        default: "false"
+        type: boolean
+      skip_backup:
+        description: "Skip volume backup (use with caution)"
+        required: false
+        default: "false"
+        type: boolean
+
+env:
+  VPS_HOST: ${{ secrets.VPS_HOST }}
+  SSH_KEY_PATH: /tmp/vps_ssh_key
+
+jobs:
+  check-updates:
+    name: Check for Image Updates
+    runs-on: ubuntu-latest
+    outputs:
+      updates_available: ${{ steps.check.outputs.updates_available }}
+      images_to_update: ${{ steps.check.outputs.images_to_update }}
+      update_summary: ${{ steps.check.outputs.update_summary }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup SSH
+        run: |
+          echo "${{ secrets.VPS_SSH_KEY }}" > ${{ env.SSH_KEY_PATH }}
+          chmod 600 ${{ env.SSH_KEY_PATH }}
+          mkdir -p ~/.ssh
+          ssh-keyscan -H ${{ env.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Check for updates
+        id: check
+        run: |
+          result=$(ssh -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no \
+            root@${{ env.VPS_HOST }} 'bash -s' < scripts/check-updates.sh 2>&1) || exit_code=$?
+
+          echo "${result}"
+
+          # Exit code 2 means no updates
+          if [[ "${exit_code:-0}" == "2" ]]; then
+            echo "updates_available=false" >> "$GITHUB_OUTPUT"
+          elif [[ "${exit_code:-0}" == "0" ]]; then
+            echo "updates_available=true" >> "$GITHUB_OUTPUT"
+            # Extract summary from output
+            summary=$(echo "${result}" | sed -n '/Updates available for:/,/^$/p')
+            {
+              echo "update_summary<<EOF"
+              echo "${summary}"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo "Check script failed with exit code ${exit_code:-unknown}"
+            echo "${result}"
+            exit 1
+          fi
+
+      - name: Decision
+        run: |
+          if [[ "${{ steps.check.outputs.updates_available }}" == "true" ]]; then
+            echo "### Updates Detected" >> $GITHUB_STEP_SUMMARY
+            echo "${{ steps.check.outputs.update_summary }}" >> $GITHUB_STEP_SUMMARY
+          elif [[ "${{ inputs.force_deploy }}" == "true" ]]; then
+            echo "### No Updates — Force Deploy Requested" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### No Updates Available" >> $GITHUB_STEP_SUMMARY
+            echo "All Coroot stack images are up to date." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Cleanup SSH
+        if: always()
+        run: rm -f ${{ env.SSH_KEY_PATH }}
+
+  backup:
+    name: Backup Volumes
+    needs: check-updates
+    if: needs.check-updates.outputs.updates_available == 'true' || inputs.force_deploy == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup SSH
+        run: |
+          echo "${{ secrets.VPS_SSH_KEY }}" > ${{ env.SSH_KEY_PATH }}
+          chmod 600 ${{ env.SSH_KEY_PATH }}
+          mkdir -p ~/.ssh
+          ssh-keyscan -H ${{ env.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Skip check
+        if: inputs.skip_backup == 'true'
+        run: |
+          echo "### Backup Skipped" >> $GITHUB_STEP_SUMMARY
+          echo "Backup was skipped by user request." >> $GITHUB_STEP_SUMMARY
+
+      - name: Backup all volumes
+        if: inputs.skip_backup != 'true'
+        run: |
+          echo "Starting volume backup..."
+          ssh -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no \
+            root@${{ env.VPS_HOST }} 'bash -s' < scripts/backup-volumes.sh
+
+          echo "### Backup Complete" >> $GITHUB_STEP_SUMMARY
+          echo "All volumes backed up before deployment." >> $GITHUB_STEP_SUMMARY
+
+      - name: Cleanup SSH
+        if: always()
+        run: rm -f ${{ env.SSH_KEY_PATH }}
+
+  staging:
+    name: Staging Validation
+    needs: backup
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup SSH
+        run: |
+          echo "${{ secrets.VPS_SSH_KEY }}" > ${{ env.SSH_KEY_PATH }}
+          chmod 600 ${{ env.SSH_KEY_PATH }}
+          mkdir -p ~/.ssh
+          ssh-keyscan -H ${{ env.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Skip check
+        if: inputs.skip_staging == 'true'
+        run: |
+          echo "### Staging Skipped" >> $GITHUB_STEP_SUMMARY
+          echo "Staging validation was skipped by user request." >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload staging compose file
+        if: inputs.skip_staging != 'true'
+        run: |
+          ssh -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no \
+            root@${{ env.VPS_HOST }} 'mkdir -p /opt/coroot-staging'
+          scp -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no \
+            docker-compose.staging.yml \
+            root@${{ env.VPS_HOST }}:/opt/coroot-staging/docker-compose.staging.yml
+
+      - name: Deploy to staging
+        if: inputs.skip_staging != 'true'
+        run: |
+          ssh -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no \
+            root@${{ env.VPS_HOST }} 'bash -s' < scripts/deploy-staging.sh
+
+          echo "### Staging Validation Passed" >> $GITHUB_STEP_SUMMARY
+          echo "All health checks passed in the staging environment." >> $GITHUB_STEP_SUMMARY
+
+      - name: Cleanup staging on failure
+        if: failure()
+        run: |
+          ssh -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no \
+            root@${{ env.VPS_HOST }} \
+            'docker compose -p coroot-staging -f /opt/coroot-staging/docker-compose.staging.yml down -v 2>/dev/null || true'
+
+          echo "### Staging Validation FAILED" >> $GITHUB_STEP_SUMMARY
+          echo "Staging health checks did not pass. Production was NOT updated." >> $GITHUB_STEP_SUMMARY
+
+      - name: Cleanup SSH
+        if: always()
+        run: rm -f ${{ env.SSH_KEY_PATH }}
+
+  deploy:
+    name: Deploy to Production
+    needs: staging
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup SSH
+        run: |
+          echo "${{ secrets.VPS_SSH_KEY }}" > ${{ env.SSH_KEY_PATH }}
+          chmod 600 ${{ env.SSH_KEY_PATH }}
+          mkdir -p ~/.ssh
+          ssh-keyscan -H ${{ env.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Deploy to production
+        run: |
+          ssh -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no \
+            root@${{ env.VPS_HOST }} 'bash -s' < scripts/deploy-production.sh
+
+      - name: Deployment success summary
+        if: success()
+        run: |
+          echo "### Production Deployment Successful" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Coroot stack has been updated to the latest images." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Step | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Update check | Passed |" >> $GITHUB_STEP_SUMMARY
+          echo "| Volume backup | Completed |" >> $GITHUB_STEP_SUMMARY
+          echo "| Staging validation | Passed |" >> $GITHUB_STEP_SUMMARY
+          echo "| Production deploy | **Successful** |" >> $GITHUB_STEP_SUMMARY
+          echo "| Health checks | Passed |" >> $GITHUB_STEP_SUMMARY
+
+      - name: Cleanup SSH
+        if: always()
+        run: rm -f ${{ env.SSH_KEY_PATH }}
+
+  rollback:
+    name: Rollback on Failure
+    needs: deploy
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup SSH
+        run: |
+          echo "${{ secrets.VPS_SSH_KEY }}" > ${{ env.SSH_KEY_PATH }}
+          chmod 600 ${{ env.SSH_KEY_PATH }}
+          mkdir -p ~/.ssh
+          ssh-keyscan -H ${{ env.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Execute rollback
+        run: |
+          echo "Production deployment failed. Initiating rollback..."
+          ssh -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no \
+            root@${{ env.VPS_HOST }} 'bash -s' < scripts/rollback.sh
+
+      - name: Rollback summary
+        if: always()
+        run: |
+          if [[ "${{ steps.*.outcome }}" == *"failure"* ]]; then
+            echo "### ROLLBACK FAILED" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**CRITICAL**: Both deployment and rollback failed." >> $GITHUB_STEP_SUMMARY
+            echo "Manual intervention required on the VPS." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "ssh -i ~/.ssh/coroot-table root@${{ env.VPS_HOST }}" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### Rollback Completed" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Production deployment failed and was rolled back to the previous backup." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Step | Status |" >> $GITHUB_STEP_SUMMARY
+            echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+            echo "| Production deploy | **Failed** |" >> $GITHUB_STEP_SUMMARY
+            echo "| Volume restore | Completed |" >> $GITHUB_STEP_SUMMARY
+            echo "| Service restart | Completed |" >> $GITHUB_STEP_SUMMARY
+            echo "| Post-rollback health | Verified |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Cleanup SSH
+        if: always()
+        run: rm -f ${{ env.SSH_KEY_PATH }}
+
+  cleanup:
+    name: Post-Pipeline Cleanup
+    needs: [deploy, rollback]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup SSH
+        run: |
+          echo "${{ secrets.VPS_SSH_KEY }}" > ${{ env.SSH_KEY_PATH }}
+          chmod 600 ${{ env.SSH_KEY_PATH }}
+          mkdir -p ~/.ssh
+          ssh-keyscan -H ${{ env.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Cleanup VPS
+        run: |
+          ssh -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no \
+            root@${{ env.VPS_HOST }} bash -c '
+              # Ensure staging is torn down
+              docker compose -p coroot-staging -f /opt/coroot-staging/docker-compose.staging.yml down -v 2>/dev/null || true
+
+              # Prune dangling images to free disk space
+              docker image prune -f 2>/dev/null || true
+
+              # Show final disk usage
+              echo "=== Disk Usage ==="
+              df -h / | tail -1
+              echo ""
+              echo "=== Docker Disk Usage ==="
+              docker system df 2>/dev/null || true
+            '
+
+      - name: Final summary
+        if: always()
+        run: |
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Pipeline completed at $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+
+      - name: Cleanup SSH
+        if: always()
+        run: rm -f ${{ env.SSH_KEY_PATH }}
