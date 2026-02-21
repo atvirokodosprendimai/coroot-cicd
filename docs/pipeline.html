@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Coroot CI/CD Pipeline — Live Status</title>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --text-muted: #8b949e;
+    --success: #3fb950;
+    --failure: #f85149;
+    --pending: #d29922;
+    --skipped: #8b949e;
+    --running: #58a6ff;
+    --link: #58a6ff;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+  .header {
+    padding: 24px 32px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 16px;
+  }
+  .header h1 { font-size: 20px; font-weight: 600; }
+  .header .subtitle { color: var(--text-muted); font-size: 13px; }
+  .controls {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  button, input {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  button:hover { border-color: var(--text-muted); }
+  input { width: 320px; }
+  input::placeholder { color: var(--text-muted); }
+  .status-bar {
+    padding: 12px 32px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    gap: 24px;
+    align-items: center;
+    font-size: 13px;
+    flex-wrap: wrap;
+  }
+  .status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+    margin-right: 6px;
+  }
+  .status-dot.success { background: var(--success); }
+  .status-dot.failure { background: var(--failure); }
+  .status-dot.pending { background: var(--pending); }
+  .status-dot.in_progress { background: var(--running); animation: pulse 1.5s infinite; }
+  .status-dot.skipped { background: var(--skipped); }
+  .status-dot.cancelled { background: var(--skipped); }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+  .main { padding: 32px; }
+  svg { width: 100%; }
+  .pipeline-node rect {
+    rx: 8; ry: 8;
+    stroke-width: 2;
+  }
+  .pipeline-node text {
+    fill: var(--text);
+    font-size: 13px;
+    font-weight: 500;
+  }
+  .pipeline-node .duration {
+    fill: var(--text-muted);
+    font-size: 11px;
+  }
+  .pipeline-link line {
+    stroke: var(--border);
+    stroke-width: 2;
+  }
+  .pipeline-link polygon {
+    fill: var(--border);
+  }
+  .run-list {
+    margin-top: 32px;
+  }
+  .run-list h2 {
+    font-size: 16px;
+    margin-bottom: 16px;
+    font-weight: 600;
+  }
+  .run-item {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 20px;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    cursor: pointer;
+    transition: border-color 0.15s;
+  }
+  .run-item:hover { border-color: var(--text-muted); }
+  .run-item.active { border-color: var(--link); }
+  .run-meta { flex: 1; }
+  .run-meta .title { font-weight: 500; }
+  .run-meta .info { color: var(--text-muted); font-size: 12px; }
+  .run-status {
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 500;
+    text-transform: uppercase;
+  }
+  .run-status.success { background: rgba(63,185,80,0.15); color: var(--success); }
+  .run-status.failure { background: rgba(248,81,73,0.15); color: var(--failure); }
+  .run-status.in_progress { background: rgba(88,166,255,0.15); color: var(--running); }
+  .run-status.pending, .run-status.queued, .run-status.waiting {
+    background: rgba(210,153,34,0.15); color: var(--pending);
+  }
+  .run-status.cancelled { background: rgba(139,148,158,0.15); color: var(--skipped); }
+  .error-msg {
+    background: rgba(248,81,73,0.1);
+    border: 1px solid rgba(248,81,73,0.3);
+    border-radius: 8px;
+    padding: 16px;
+    margin: 16px 0;
+    color: var(--failure);
+  }
+  .no-data {
+    color: var(--text-muted);
+    text-align: center;
+    padding: 48px;
+  }
+  a { color: var(--link); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>Coroot CI/CD Pipeline</h1>
+    <div class="subtitle">Real-time GitHub Actions workflow status</div>
+  </div>
+  <div class="controls">
+    <input type="password" id="token-input" placeholder="GitHub PAT (stored locally)">
+    <button onclick="saveToken()">Save</button>
+    <button onclick="fetchData()">Refresh</button>
+  </div>
+</div>
+
+<div class="status-bar" id="status-bar">
+  <span id="last-updated" style="color:var(--text-muted)">Not loaded</span>
+</div>
+
+<div class="main">
+  <div id="pipeline-svg"></div>
+  <div class="run-list" id="run-list">
+    <h2>Recent Runs</h2>
+    <div id="runs-container" class="no-data">
+      Enter a GitHub Personal Access Token to load pipeline data.<br>
+      The token needs <code>repo</code> scope for private repos. It is stored only in your browser's localStorage.
+    </div>
+  </div>
+</div>
+
+<script>
+const OWNER = 'atvirokodosprendimai';
+const REPO = 'coroot-cicd';
+const WORKFLOW = 'coroot-update.yml';
+
+const JOBS_ORDER = [
+  'Check for Image Updates',
+  'Backup Volumes',
+  'Staging Validation',
+  'Deploy to Production',
+  'Rollback on Failure',
+  'Post-Pipeline Cleanup'
+];
+
+const JOBS_SHORT = {
+  'Check for Image Updates': 'Check Updates',
+  'Backup Volumes': 'Backup',
+  'Staging Validation': 'Staging',
+  'Deploy to Production': 'Deploy',
+  'Rollback on Failure': 'Rollback',
+  'Post-Pipeline Cleanup': 'Cleanup'
+};
+
+const STATUS_COLORS = {
+  success: '#3fb950',
+  completed: '#3fb950',
+  failure: '#f85149',
+  cancelled: '#8b949e',
+  skipped: '#8b949e',
+  in_progress: '#58a6ff',
+  queued: '#d29922',
+  pending: '#d29922',
+  waiting: '#d29922',
+};
+
+function getToken() {
+  return localStorage.getItem('gh_pat') || '';
+}
+function saveToken() {
+  const t = document.getElementById('token-input').value.trim();
+  if (t) {
+    localStorage.setItem('gh_pat', t);
+    document.getElementById('token-input').value = '';
+    fetchData();
+  }
+}
+
+async function ghFetch(path) {
+  const token = getToken();
+  if (!token) throw new Error('No token');
+  const resp = await fetch(`https://api.github.com${path}`, {
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Accept': 'application/vnd.github+json',
+    }
+  });
+  if (!resp.ok) throw new Error(`GitHub API ${resp.status}: ${resp.statusText}`);
+  return resp.json();
+}
+
+let currentRunId = null;
+let runsData = [];
+
+async function fetchData() {
+  try {
+    const data = await ghFetch(`/repos/${OWNER}/${REPO}/actions/workflows/${WORKFLOW}/runs?per_page=10`);
+    runsData = data.workflow_runs || [];
+    renderRuns();
+    if (runsData.length > 0) {
+      const run = currentRunId ? runsData.find(r => r.id === currentRunId) || runsData[0] : runsData[0];
+      await selectRun(run.id);
+    }
+    document.getElementById('last-updated').textContent = `Last updated: ${new Date().toLocaleTimeString()}`;
+  } catch (e) {
+    document.getElementById('runs-container').innerHTML = `<div class="error-msg">${e.message}</div>`;
+  }
+}
+
+function renderRuns() {
+  const container = document.getElementById('runs-container');
+  if (!runsData.length) {
+    container.innerHTML = '<div class="no-data">No workflow runs found.</div>';
+    return;
+  }
+  container.innerHTML = runsData.map(run => {
+    const status = run.conclusion || run.status;
+    const date = new Date(run.created_at);
+    const trigger = run.event === 'schedule' ? 'Scheduled' :
+                    run.event === 'workflow_dispatch' ? 'Manual' : run.event;
+    return `
+      <div class="run-item ${run.id === currentRunId ? 'active' : ''}" onclick="selectRun(${run.id})">
+        <span class="status-dot ${status}"></span>
+        <div class="run-meta">
+          <div class="title">Run #${run.run_number}</div>
+          <div class="info">${trigger} &middot; ${date.toLocaleDateString()} ${date.toLocaleTimeString()} &middot;
+            <a href="${run.html_url}" target="_blank">View on GitHub</a></div>
+        </div>
+        <span class="run-status ${status}">${status}</span>
+      </div>
+    `;
+  }).join('');
+}
+
+async function selectRun(runId) {
+  currentRunId = runId;
+  renderRuns();
+  try {
+    const data = await ghFetch(`/repos/${OWNER}/${REPO}/actions/runs/${runId}/jobs`);
+    renderPipeline(data.jobs || []);
+  } catch (e) {
+    document.getElementById('pipeline-svg').innerHTML = `<div class="error-msg">${e.message}</div>`;
+  }
+}
+
+function renderPipeline(jobs) {
+  const container = document.getElementById('pipeline-svg');
+  container.innerHTML = '';
+
+  // Map jobs by name
+  const jobMap = {};
+  jobs.forEach(j => { jobMap[j.name] = j; });
+
+  // Build ordered nodes
+  const nodes = JOBS_ORDER.map((name, i) => {
+    const job = jobMap[name];
+    const status = job ? (job.conclusion || job.status) : 'pending';
+    const duration = job && job.completed_at && job.started_at
+      ? Math.round((new Date(job.completed_at) - new Date(job.started_at)) / 1000)
+      : null;
+    return { name, short: JOBS_SHORT[name], status, duration, index: i, job };
+  });
+
+  // Edges: linear chain except Rollback branches from Deploy
+  const edges = [
+    [0, 1], // check -> backup
+    [1, 2], // backup -> staging
+    [2, 3], // staging -> deploy
+    [3, 4], // deploy -> rollback (conditional)
+    [3, 5], // deploy -> cleanup
+    [4, 5], // rollback -> cleanup
+  ];
+
+  const nodeW = 140, nodeH = 64, padX = 40, padY = 30;
+  // Layout: row 0: 0,1,2,3 | row 1: 4 (under 3) | row 0 continued: 5 (after 3)
+  const positions = [
+    { x: 0, y: 0 },                              // Check Updates
+    { x: (nodeW + padX), y: 0 },                  // Backup
+    { x: 2 * (nodeW + padX), y: 0 },              // Staging
+    { x: 3 * (nodeW + padX), y: 0 },              // Deploy
+    { x: 3 * (nodeW + padX), y: nodeH + padY },   // Rollback (below Deploy)
+    { x: 4 * (nodeW + padX), y: 0 },              // Cleanup
+  ];
+
+  const svgW = 5 * (nodeW + padX) + 40;
+  const svgH = 2 * (nodeH + padY) + 40;
+  const offX = 20, offY = 20;
+
+  const svg = d3.select(container)
+    .append('svg')
+    .attr('viewBox', `0 0 ${svgW} ${svgH}`)
+    .attr('height', svgH);
+
+  // Defs for arrow marker
+  svg.append('defs').append('marker')
+    .attr('id', 'arrow')
+    .attr('viewBox', '0 0 10 10')
+    .attr('refX', 10).attr('refY', 5)
+    .attr('markerWidth', 8).attr('markerHeight', 8)
+    .attr('orient', 'auto')
+    .append('path')
+    .attr('d', 'M 0 0 L 10 5 L 0 10 z')
+    .attr('fill', '#30363d');
+
+  // Draw edges
+  const linkGroup = svg.append('g').attr('class', 'pipeline-links');
+  edges.forEach(([from, to]) => {
+    const src = positions[from];
+    const dst = positions[to];
+
+    let x1, y1, x2, y2;
+    if (src.y === dst.y) {
+      // Horizontal
+      x1 = offX + src.x + nodeW;
+      y1 = offY + src.y + nodeH / 2;
+      x2 = offX + dst.x;
+      y2 = offY + dst.y + nodeH / 2;
+    } else if (dst.y > src.y) {
+      // Down
+      x1 = offX + src.x + nodeW / 2;
+      y1 = offY + src.y + nodeH;
+      x2 = offX + dst.x + nodeW / 2;
+      y2 = offY + dst.y;
+    } else {
+      // Up
+      x1 = offX + src.x + nodeW / 2;
+      y1 = offY + src.y;
+      x2 = offX + dst.x + nodeW / 2;
+      y2 = offY + dst.y + nodeH;
+    }
+
+    // Special: rollback->cleanup goes right then up
+    if (from === 4 && to === 5) {
+      x1 = offX + src.x + nodeW;
+      y1 = offY + src.y + nodeH / 2;
+      x2 = offX + dst.x;
+      y2 = offY + dst.y + nodeH;
+      // Draw an L-shaped path
+      const midX = offX + dst.x;
+      svg.append('path')
+        .attr('d', `M ${x1} ${y1} L ${midX} ${y1} L ${midX} ${y2}`)
+        .attr('fill', 'none')
+        .attr('stroke', '#30363d')
+        .attr('stroke-width', 2)
+        .attr('marker-end', 'url(#arrow)');
+      return;
+    }
+
+    linkGroup.append('line')
+      .attr('x1', x1).attr('y1', y1)
+      .attr('x2', x2).attr('y2', y2)
+      .attr('stroke', '#30363d')
+      .attr('stroke-width', 2)
+      .attr('marker-end', 'url(#arrow)');
+  });
+
+  // Draw nodes
+  const nodeGroup = svg.selectAll('.pipeline-node')
+    .data(nodes)
+    .enter()
+    .append('g')
+    .attr('class', 'pipeline-node')
+    .attr('transform', (d, i) => `translate(${offX + positions[i].x}, ${offY + positions[i].y})`)
+    .style('cursor', 'pointer')
+    .on('click', (event, d) => {
+      if (d.job && d.job.html_url) window.open(d.job.html_url, '_blank');
+    });
+
+  nodeGroup.append('rect')
+    .attr('width', nodeW)
+    .attr('height', nodeH)
+    .attr('fill', d => {
+      const c = STATUS_COLORS[d.status] || '#30363d';
+      return c + '22'; // Transparent fill
+    })
+    .attr('stroke', d => STATUS_COLORS[d.status] || '#30363d');
+
+  // Status icon (circle)
+  nodeGroup.append('circle')
+    .attr('cx', 16).attr('cy', nodeH / 2)
+    .attr('r', 5)
+    .attr('fill', d => STATUS_COLORS[d.status] || '#30363d');
+
+  // Pulsing animation for in_progress
+  nodeGroup.filter(d => d.status === 'in_progress')
+    .select('circle')
+    .append('animate')
+    .attr('attributeName', 'opacity')
+    .attr('values', '1;0.3;1')
+    .attr('dur', '1.5s')
+    .attr('repeatCount', 'indefinite');
+
+  // Job name
+  nodeGroup.append('text')
+    .attr('x', 28).attr('y', nodeH / 2 - 4)
+    .attr('dominant-baseline', 'middle')
+    .text(d => d.short);
+
+  // Duration
+  nodeGroup.append('text')
+    .attr('class', 'duration')
+    .attr('x', 28).attr('y', nodeH / 2 + 14)
+    .attr('dominant-baseline', 'middle')
+    .text(d => d.duration != null ? `${Math.floor(d.duration / 60)}m ${d.duration % 60}s` : '');
+
+  // Update status bar
+  const bar = document.getElementById('status-bar');
+  const run = runsData.find(r => r.id === currentRunId);
+  if (run) {
+    const conclusion = run.conclusion || run.status;
+    const jobSummary = nodes.map(n => {
+      return `<span><span class="status-dot ${n.status}"></span>${n.short}</span>`;
+    }).join('');
+    bar.innerHTML = `
+      <span><strong>Run #${run.run_number}</strong></span>
+      ${jobSummary}
+      <span id="last-updated" style="color:var(--text-muted)">Updated: ${new Date().toLocaleTimeString()}</span>
+    `;
+  }
+}
+
+// Auto-load if token exists
+if (getToken()) {
+  document.getElementById('token-input').placeholder = 'Token saved (enter new to replace)';
+  fetchData();
+}
+
+// Auto-refresh every 30s
+setInterval(() => {
+  if (getToken()) fetchData();
+}, 30000);
+</script>
+</body>
+</html>
