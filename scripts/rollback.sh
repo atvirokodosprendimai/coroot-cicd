@@ -16,6 +16,16 @@
 
 set -euo pipefail
 
+DRY_RUN=false
+POSITIONAL_ARGS=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run) DRY_RUN=true; shift ;;
+    *) POSITIONAL_ARGS+=("$1"); shift ;;
+  esac
+done
+set -- "${POSITIONAL_ARGS[@]+"${POSITIONAL_ARGS[@]}"}"
+
 COMPOSE_DIR="/opt/coroot"
 COMPOSE_FILE="${COMPOSE_DIR}/docker-compose.yml"
 COMPOSE_PROJECT="coroot"
@@ -38,8 +48,46 @@ if [[ -z "${BACKUP_DIR}" || ! -d "${BACKUP_DIR}" ]]; then
 fi
 
 echo "=== Coroot Stack Rollback ==="
+if [[ "${DRY_RUN}" == true ]]; then
+  echo "MODE: DRY RUN (no changes will be made)"
+fi
 echo "Restoring from: ${BACKUP_DIR}"
 echo ""
+
+if [[ "${DRY_RUN}" == true ]]; then
+  echo "--- DRY RUN: Verifying backup contents ---"
+  if [[ -f "${BACKUP_DIR}/image-manifest.txt" ]]; then
+    echo "  image-manifest.txt: found"
+    echo "  Contents:"
+    cat "${BACKUP_DIR}/image-manifest.txt" | grep -v '^#' | grep -v '^$' | sed 's/^/    /'
+  else
+    echo "  image-manifest.txt: NOT FOUND"
+  fi
+  echo ""
+
+  echo "--- DRY RUN: Volume archives in backup ---"
+  if ls "${BACKUP_DIR}"/*.tar.gz > /dev/null 2>&1; then
+    ls -lh "${BACKUP_DIR}"/*.tar.gz | awk '{print "  " $NF " (" $5 ")"}'
+  else
+    echo "  No .tar.gz archives found"
+  fi
+  echo ""
+
+  echo "--- DRY RUN: Would perform these actions ---"
+  echo "  1. Stop all services (docker compose down)"
+  echo "  2. Restore docker-compose.yml and Caddyfile from backup"
+  echo "  3. Remove and recreate each volume, restore from archive"
+  echo "  4. Start services (docker compose up -d)"
+  echo "  5. Wait up to 120s for health checks"
+  echo "  6. Verify external endpoint: https://table.beerpub.dev"
+  echo ""
+
+  echo "--- DRY RUN: Current service status ---"
+  docker compose -p "${COMPOSE_PROJECT}" -f "${COMPOSE_FILE}" ps 2>/dev/null || echo "  (could not query)"
+  echo ""
+  echo "=== DRY RUN COMPLETE — no changes made ==="
+  exit 0
+fi
 
 # Verify backup contents
 echo "--- Verifying backup contents ---"

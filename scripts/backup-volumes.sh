@@ -12,6 +12,14 @@
 
 set -euo pipefail
 
+DRY_RUN=false
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run) DRY_RUN=true; shift ;;
+    *) echo "Unknown option: $1"; exit 1 ;;
+  esac
+done
+
 COMPOSE_DIR="/opt/coroot"
 COMPOSE_FILE="${COMPOSE_DIR}/docker-compose.yml"
 COMPOSE_PROJECT="coroot"
@@ -44,9 +52,59 @@ STOP_FOR_BACKUP=(
 )
 
 echo "=== Coroot Stack Volume Backup ==="
+if [[ "${DRY_RUN}" == true ]]; then
+  echo "MODE: DRY RUN (no changes will be made)"
+fi
 echo "Timestamp: ${TIMESTAMP}"
 echo "Backup dir: ${BACKUP_DIR}"
 echo ""
+
+if [[ "${DRY_RUN}" == true ]]; then
+  echo "--- DRY RUN: Would create ${BACKUP_DIR} ---"
+  echo ""
+  echo "--- DRY RUN: Would save image digest manifest ---"
+  for service in coroot node-agent cluster-agent prometheus clickhouse caddy; do
+    container_id=$(docker compose -p "${COMPOSE_PROJECT}" -f "${COMPOSE_FILE}" \
+      ps -q "${service}" 2>/dev/null || true)
+    if [[ -n "${container_id}" ]]; then
+      image_info=$(docker inspect --format='{{.Config.Image}}' "${container_id}" 2>/dev/null || echo "unknown")
+      echo "  ${service}: ${image_info}"
+    else
+      echo "  ${service}: not running"
+    fi
+  done
+  echo ""
+
+  echo "--- DRY RUN: Would back up the following volumes ---"
+  total_est=0
+  for vol_entry in "${VOLUMES[@]}"; do
+    vol_name="${vol_entry%%:*}"
+    vol_desc="${vol_entry#*:}"
+    if docker volume inspect "${vol_name}" > /dev/null 2>&1; then
+      size=$(docker run --rm -v "${vol_name}:/source:ro" alpine du -sh /source 2>/dev/null | cut -f1 || echo "unknown")
+      echo "  ${vol_name} (${vol_desc}): ~${size}"
+    else
+      echo "  ${vol_name} (${vol_desc}): DOES NOT EXIST"
+    fi
+  done
+  echo ""
+
+  echo "--- DRY RUN: Would stop these services for backup ---"
+  for service in "${STOP_FOR_BACKUP[@]}"; do
+    echo "  ${service}"
+  done
+  echo ""
+
+  backup_count=$(ls -1d "${BACKUP_ROOT}"/[0-9]* 2>/dev/null | wc -l || echo "0")
+  echo "--- DRY RUN: Existing backups: ${backup_count}/${MAX_BACKUPS} ---"
+  if [[ ${backup_count} -ge ${MAX_BACKUPS} ]]; then
+    prune_count=$((backup_count - MAX_BACKUPS + 1))
+    echo "  Would prune ${prune_count} old backup(s)"
+  fi
+  echo ""
+  echo "=== DRY RUN COMPLETE — no changes made ==="
+  exit 0
+fi
 
 # Create backup directory
 mkdir -p "${BACKUP_DIR}"

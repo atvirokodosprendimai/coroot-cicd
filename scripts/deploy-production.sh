@@ -13,6 +13,14 @@
 
 set -euo pipefail
 
+DRY_RUN=false
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run) DRY_RUN=true; shift ;;
+    *) echo "Unknown option: $1"; exit 1 ;;
+  esac
+done
+
 COMPOSE_DIR="/opt/coroot"
 COMPOSE_FILE="${COMPOSE_DIR}/docker-compose.yml"
 COMPOSE_PROJECT="coroot"
@@ -21,9 +29,47 @@ HEALTH_INTERVAL=5
 EXTERNAL_URL="https://table.beerpub.dev"
 
 echo "=== Production Deployment ==="
+if [[ "${DRY_RUN}" == true ]]; then
+  echo "MODE: DRY RUN (no changes will be made)"
+fi
 echo "Compose dir:  ${COMPOSE_DIR}"
 echo "External URL: ${EXTERNAL_URL}"
 echo ""
+
+if [[ "${DRY_RUN}" == true ]]; then
+  echo "--- DRY RUN: Current running images ---"
+  for service in coroot node-agent cluster-agent prometheus clickhouse caddy; do
+    container_id=$(docker compose -p "${COMPOSE_PROJECT}" -f "${COMPOSE_FILE}" \
+      ps -q "${service}" 2>/dev/null || true)
+    if [[ -n "${container_id}" ]]; then
+      image=$(docker inspect --format='{{.Config.Image}}' "${container_id}" 2>/dev/null || echo "unknown")
+      echo "  ${service}: ${image}"
+    else
+      echo "  ${service}: not running"
+    fi
+  done
+  echo ""
+
+  echo "--- DRY RUN: Would pull latest images ---"
+  docker compose -p "${COMPOSE_PROJECT}" -f "${COMPOSE_FILE}" config --images 2>/dev/null | sed 's/^/  /' || echo "  (could not list images)"
+  echo ""
+
+  echo "--- DRY RUN: Would run 'docker compose up -d --remove-orphans' ---"
+  echo ""
+
+  echo "--- DRY RUN: Would verify health via external probe ---"
+  echo "  URL: ${EXTERNAL_URL}"
+  echo "  Retries: 3, timeout per attempt: 15s"
+  echo ""
+
+  # Actually probe the external URL to show current status
+  echo "--- DRY RUN: Current external endpoint status ---"
+  ext_code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 10 --max-time 15 "${EXTERNAL_URL}/" 2>/dev/null || echo "000")
+  echo "  ${EXTERNAL_URL}: HTTP ${ext_code}"
+  echo ""
+  echo "=== DRY RUN COMPLETE — no changes made ==="
+  exit 0
+fi
 
 # Save current image IDs before update (for potential rollback reference)
 echo "--- Recording pre-update state ---"

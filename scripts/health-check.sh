@@ -30,6 +30,8 @@ TIMEOUT=120
 CHECK_INTERVAL=5
 STACK_NAME="production"
 
+DRY_RUN=false
+
 # Parse arguments
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -48,6 +50,10 @@ while [[ $# -gt 0 ]]; do
       EXTERNAL_URL="$2"
       shift 2
       ;;
+    --dry-run)
+      DRY_RUN=true
+      shift
+      ;;
     *)
       echo "Unknown option: $1"
       exit 1
@@ -56,8 +62,37 @@ while [[ $# -gt 0 ]]; do
 done
 
 echo "=== Health Check: ${STACK_NAME} stack ==="
+if [[ "${DRY_RUN}" == true ]]; then
+  echo "MODE: DRY RUN (single probe per endpoint, no retries)"
+fi
 echo "Timeout: ${TIMEOUT}s"
 echo ""
+
+if [[ "${DRY_RUN}" == true ]]; then
+  echo "--- DRY RUN: Probing endpoints once (no retries) ---"
+  echo ""
+  for name_url in "Coroot UI|${COROOT_URL}/" "Prometheus|${PROMETHEUS_URL}/-/healthy" "ClickHouse|${CLICKHOUSE_URL}/ping"; do
+    name="${name_url%%|*}"
+    url="${name_url#*|}"
+    code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 10 "${url}" 2>/dev/null || echo "000")
+    echo "  ${name} (${url}): HTTP ${code}"
+  done
+  if [[ -n "${EXTERNAL_URL}" ]]; then
+    code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 10 "${EXTERNAL_URL}/" 2>/dev/null || echo "000")
+    echo "  External (${EXTERNAL_URL}/): HTTP ${code}"
+  fi
+  echo ""
+
+  echo "--- DRY RUN: Docker compose status ---"
+  if [[ "${STACK_NAME}" == "staging" ]]; then
+    docker compose -p coroot-staging ps 2>/dev/null || echo "  Staging not running"
+  else
+    docker compose -p coroot -f /opt/coroot/docker-compose.yml ps 2>/dev/null || echo "  Production not running"
+  fi
+  echo ""
+  echo "=== DRY RUN COMPLETE ==="
+  exit 0
+fi
 
 check_passed=true
 checks_run=0

@@ -18,6 +18,14 @@
 
 set -euo pipefail
 
+DRY_RUN=false
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run) DRY_RUN=true; shift ;;
+    *) echo "Unknown option: $1"; exit 1 ;;
+  esac
+done
+
 STAGING_DIR="/opt/coroot-staging"
 COMPOSE_FILE="${STAGING_DIR}/docker-compose.staging.yml"
 PROJECT_NAME="coroot-staging"
@@ -25,9 +33,40 @@ HEALTH_TIMEOUT=120
 HEALTH_INTERVAL=5
 
 echo "=== Staging Deployment ==="
+if [[ "${DRY_RUN}" == true ]]; then
+  echo "MODE: DRY RUN (no changes will be made)"
+fi
 echo "Directory: ${STAGING_DIR}"
 echo "Project:   ${PROJECT_NAME}"
 echo ""
+
+if [[ "${DRY_RUN}" == true ]]; then
+  if [[ ! -f "${COMPOSE_FILE}" ]]; then
+    echo "WARNING: ${COMPOSE_FILE} not found. Would fail on real run."
+  else
+    echo "--- DRY RUN: Compose file found at ${COMPOSE_FILE} ---"
+    echo "  Services defined:"
+    docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" config --services 2>/dev/null | sed 's/^/    /' || echo "    (could not parse compose file)"
+  fi
+  echo ""
+
+  echo "--- DRY RUN: Would pull these images ---"
+  docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" config --images 2>/dev/null | sed 's/^/  /' || echo "  (could not list images)"
+  echo ""
+
+  echo "--- DRY RUN: Would deploy staging stack and run health checks ---"
+  echo "  Health timeout: ${HEALTH_TIMEOUT}s"
+  echo "  Health endpoints:"
+  echo "    - http://localhost:8081/ (Coroot)"
+  echo "    - http://localhost:9091/-/healthy (Prometheus)"
+  echo "    - http://localhost:8124/ping (ClickHouse)"
+  echo ""
+
+  echo "--- DRY RUN: Would tear down staging after validation ---"
+  echo ""
+  echo "=== DRY RUN COMPLETE — no changes made ==="
+  exit 0
+fi
 
 # Ensure staging directory exists
 mkdir -p "${STAGING_DIR}"

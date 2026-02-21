@@ -1,0 +1,170 @@
+name: Uptime Monitor
+
+# Independent uptime check for table.beerpub.dev.
+# Creates a GitHub Issue if the endpoint is unreachable.
+# Automatically closes the issue when the endpoint recovers.
+
+on:
+  schedule:
+    # Every 5 minutes
+    - cron: "*/5 * * * *"
+
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "URL to check (default: https://table.beerpub.dev)"
+        required: false
+        default: "https://table.beerpub.dev"
+        type: string
+
+env:
+  MONITOR_URL: ${{ inputs.url || 'https://table.beerpub.dev' }}
+  # Label used to track uptime incident issues
+  INCIDENT_LABEL: "incident:downtime"
+
+permissions:
+  issues: write
+
+jobs:
+  check:
+    name: Check Endpoint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe endpoint
+        id: probe
+        run: |
+          URL="${{ env.MONITOR_URL }}"
+          MAX_RETRIES=3
+          RETRY_DELAY=10
+
+          echo "Checking: ${URL}"
+          echo ""
+
+          is_up=false
+          for i in $(seq 1 ${MAX_RETRIES}); do
+            http_code=$(curl -s -o /dev/null -w "%{http_code}" \
+              --connect-timeout 10 --max-time 30 \
+              "${URL}" 2>/dev/null || echo "000")
+
+            echo "Attempt ${i}/${MAX_RETRIES}: HTTP ${http_code}"
+
+            if [[ "${http_code}" == "200" ]]; then
+              is_up=true
+              break
+            fi
+
+            if [[ ${i} -lt ${MAX_RETRIES} ]]; then
+              echo "Retrying in ${RETRY_DELAY}s..."
+              sleep ${RETRY_DELAY}
+            fi
+          done
+
+          echo ""
+          if [[ "${is_up}" == true ]]; then
+            echo "Status: UP"
+            echo "is_up=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Status: DOWN (last HTTP code: ${http_code})"
+            echo "is_up=false" >> "$GITHUB_OUTPUT"
+            echo "http_code=${http_code}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Find existing incident issue
+        id: find_issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: '${{ env.INCIDENT_LABEL }}',
+              state: 'open',
+              per_page: 1,
+            });
+            if (issues.data.length > 0) {
+              core.setOutput('issue_number', issues.data[0].number);
+              core.setOutput('has_open_issue', 'true');
+            } else {
+              core.setOutput('has_open_issue', 'false');
+            }
+
+      - name: Create incident issue (endpoint is DOWN)
+        if: steps.probe.outputs.is_up == 'false' && steps.find_issue.outputs.has_open_issue == 'false'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const now = new Date().toISOString();
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Downtime: ${{ env.MONITOR_URL }} is unreachable`,
+              body: [
+                `## Downtime Detected`,
+                ``,
+                `| Field | Value |`,
+                `|-------|-------|`,
+                `| **URL** | ${{ env.MONITOR_URL }} |`,
+                `| **Detected at** | ${now} |`,
+                `| **Last HTTP code** | ${{ steps.probe.outputs.http_code }} |`,
+                `| **Retries** | 3 attempts with 10s intervals |`,
+                ``,
+                `This issue was created automatically by the uptime monitor workflow.`,
+                `It will be closed automatically when the endpoint recovers.`,
+                ``,
+                `### Manual check`,
+                `\`\`\`bash`,
+                `curl -v ${{ env.MONITOR_URL }}`,
+                `\`\`\``,
+              ].join('\n'),
+              labels: ['${{ env.INCIDENT_LABEL }}'],
+            });
+
+      - name: Comment on existing issue (still DOWN)
+        if: steps.probe.outputs.is_up == 'false' && steps.find_issue.outputs.has_open_issue == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const now = new Date().toISOString();
+            // Only comment every 30 min (6 checks) to avoid spam.
+            // Check if the last comment was recent.
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ steps.find_issue.outputs.issue_number }},
+              per_page: 1,
+              direction: 'desc',
+            });
+            if (comments.data.length > 0) {
+              const lastComment = new Date(comments.data[0].created_at);
+              const minutesSince = (Date.now() - lastComment.getTime()) / 60000;
+              if (minutesSince < 25) {
+                console.log(`Last comment was ${minutesSince.toFixed(0)} min ago, skipping.`);
+                return;
+              }
+            }
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ steps.find_issue.outputs.issue_number }},
+              body: `Still down at ${now}. HTTP code: ${{ steps.probe.outputs.http_code }}`,
+            });
+
+      - name: Close incident issue (endpoint RECOVERED)
+        if: steps.probe.outputs.is_up == 'true' && steps.find_issue.outputs.has_open_issue == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const now = new Date().toISOString();
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ steps.find_issue.outputs.issue_number }},
+              body: `## Recovered\n\nEndpoint is responding normally at ${now}. Closing this incident.`,
+            });
+            await github.rest.issues.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ steps.find_issue.outputs.issue_number }},
+              state: 'closed',
+              state_reason: 'completed',
+            });

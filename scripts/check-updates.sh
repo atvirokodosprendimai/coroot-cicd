@@ -13,6 +13,14 @@
 
 set -euo pipefail
 
+DRY_RUN=false
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run) DRY_RUN=true; shift ;;
+    *) echo "Unknown option: $1"; exit 1 ;;
+  esac
+done
+
 COMPOSE_DIR="/opt/coroot"
 COMPOSE_PROJECT="coroot"
 
@@ -34,7 +42,12 @@ updates_found=false
 update_summary=""
 images_to_update=""
 
-echo "=== Checking for Coroot stack image updates ==="
+if [[ "${DRY_RUN}" == true ]]; then
+  echo "=== DRY RUN: Checking for Coroot stack image updates ==="
+  echo "(No changes will be made)"
+else
+  echo "=== Checking for Coroot stack image updates ==="
+fi
 echo ""
 
 for image in "${IMAGES[@]}"; do
