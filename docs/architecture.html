@@ -6,92 +6,70 @@
 <title>Architecture — Coroot CI/CD</title>
 <link rel="stylesheet" href="tufte.css"/>
 <style>
-  body { background: #151515; color: #e0e0e0; }
-  a, a:link { color: #7eb8da; }
-  h1, h2, h3 { color: #f0f0f0; }
-  .sidenote, .marginnote { color: #a0a0a0; }
-  code { color: #d4d4d4; background: #1e1e1e; }
-  .diagram-container {
-    margin: 2rem 0;
-    padding: 1.5rem;
-    background: #1a1a1a;
-    border-radius: 4px;
-    overflow-x: auto;
-    text-align: center;
-  }
-  .diagram-container object, .diagram-container img {
-    max-width: 100%;
-    height: auto;
-  }
-  .regen {
-    margin-top: 1rem;
-    color: #888;
-    font-size: 0.8rem;
-  }
+  body { background-color: #151515; color: #ddd; }
+  code { background: #1a1a1a; padding: 0.1em 0.3em; border-radius: 2px; }
+  pre > code { background: #1a1a1a; padding: 1rem; border-radius: 2px; }
 </style>
 </head>
 <body>
 <article>
 
 <h1>Architecture</h1>
-<p class="subtitle"><a href="index.html">&larr; Back to overview</a></p>
+<p class="subtitle"><a href="index.html">&larr; Coroot CI/CD</a></p>
 
 <section>
-<p>
-<span class="newthought">The diagram below</span> shows the complete system architecture:
-GitHub CI/CD infrastructure on the left, the Hetzner VPS with its Docker stack in the center,
-and external services on the right.
-<label for="sn-d2" class="margin-toggle sidenote-number"></label>
-<input type="checkbox" id="sn-d2" class="margin-toggle"/>
-<span class="sidenote">Generated from <code>docs/architecture.d2</code> using
-<a href="https://d2lang.com">D2</a> with the ELK layout engine and dark theme (200).
-D2 is a declarative diagramming language that produces clean, readable SVG output.</span>
-</p>
+<p><span class="newthought">The diagram below</span> shows the complete system: GitHub
+CI/CD infrastructure on the left, the Hetzner VPS with its Docker stack in the center,
+and external services on the right.<label for="sn-d2" class="margin-toggle sidenote-number"></label><input
+type="checkbox" id="sn-d2" class="margin-toggle"/><span class="sidenote">Generated from
+<code>docs/architecture.d2</code> using <a href="https://d2lang.com">D2</a> with the ELK
+layout engine and theme 200 (dark). D2 is a declarative diagramming language&mdash;the source
+reads like a description of the system rather than coordinates and drawing commands.</span>
+Dashed lines indicate conditional or optional paths; the red dashed line from Deploy to
+Rollback fires only on failure.</p>
 
 <figure class="fullwidth">
-  <div class="diagram-container">
-    <object type="image/svg+xml" data="architecture.svg">
-      <img src="architecture.svg" alt="Coroot CI/CD Architecture Diagram">
-    </object>
-  </div>
+  <object type="image/svg+xml" data="architecture.svg" style="width:100%">
+    <img src="architecture.svg" alt="Coroot CI/CD Architecture Diagram">
+  </object>
 </figure>
 
-<p class="regen">
-Regenerate: <code>d2 --theme 200 --layout elk --pad 40 docs/architecture.d2 docs/architecture.svg</code>
-</p>
+<p>To regenerate after editing the source:</p>
+<pre><code>d2 --theme 200 --layout elk --pad 40 docs/architecture.d2 docs/architecture.svg</code></pre>
 </section>
 
 <section>
-<h2>Key Design Decisions</h2>
+<h2>Design Decisions</h2>
 
-<p>
-<span class="newthought">Services use <code>expose:</code></span> rather than <code>ports:</code>.
-<label for="sn-expose" class="margin-toggle sidenote-number"></label>
-<input type="checkbox" id="sn-expose" class="margin-toggle"/>
-<span class="sidenote">This was the root cause of the first three pipeline test failures.
-Health checks attempted <code>curl http://localhost:8080</code> from the host, which returned
-connection refused because the port was only open inside the Docker network.
-See the <a href="https://github.com/atvirokodosprendimai/coroot-cicd/blob/main/POSTMORTEM.md">postmortem</a>
-for the full incident timeline.</span>
-Only Caddy binds to the host network (ports 80 and 443). All other services are reachable
+<p><span class="newthought">Services use <code>expose:</code></span> rather than
+<code>ports:</code>.<label for="sn-expose" class="margin-toggle sidenote-number"></label><input
+type="checkbox" id="sn-expose" class="margin-toggle"/><span class="sidenote">This was the root
+cause of the first three pipeline test failures. Health check scripts attempted
+<code>curl http://localhost:8080</code> from the host, which returned connection refused because
+the port was only open inside the Docker network. See the
+<a href="https://github.com/atvirokodosprendimai/coroot-cicd/blob/main/POSTMORTEM.md">postmortem</a>
+for the full incident timeline and five-whys analysis.</span>
+Only Caddy binds to the host network on ports 80 and 443. All other services are reachable
 only within the Docker network or through Caddy's reverse proxy. This reduces the attack
-surface to a single entry point.
-</p>
+surface to a single entry point with TLS termination.</p>
 
-<p>
-<span class="newthought">The external Caddy endpoint</span> is the sole authoritative health check.
-Internal probes via <code>docker exec</code> proved unreliable for Coroot specifically.
-The pipeline probes <code>https://table.beerpub.dev</code> with three retries and 15-second
-timeouts as the definitive signal of production health.
-</p>
+<p><span class="newthought">The external Caddy endpoint</span> at
+<code>https://table.beerpub.dev</code> is the sole authoritative health check. Internal probes
+via <code>docker exec</code> proved unreliable for Coroot specifically&mdash;the container's
+<code>wget</code> binary did not behave as expected. The pipeline probes the external endpoint
+with three retries and treats HTTP 200 as definitive proof of health, regardless of Docker's
+own healthcheck status.</p>
 
-<p>
-<span class="newthought">Backups are both local and remote.</span>
-Local backups at <code>/opt/coroot/backups/</code> enable fast rollback (under 3 minutes).
-Remote backups on a Hetzner Storage Box provide disaster recovery if the VPS disk fails.
-The sync uses rsync over SSH on port 23, which is the standard SSH port for Hetzner
-Storage Boxes.
-</p>
+<p><span class="newthought">Backups are both local and remote.</span> Local backups at
+<code>/opt/coroot/backups/</code> enable fast rollback under three minutes. Remote backups
+on a Hetzner Storage Box provide disaster recovery if the VPS disk fails. The sync uses rsync
+over SSH on port 23, which is Hetzner's standard SSH port for Storage Boxes.<label for="sn-port23"
+class="margin-toggle sidenote-number"></label><input type="checkbox" id="sn-port23"
+class="margin-toggle"/><span class="sidenote">Hetzner Storage Boxes do not provide a shell.
+They only support SFTP, rsync, and SCP. The remote backup script uses SFTP for directory
+listing and pruning, and rsync for the actual data transfer. The initial implementation
+attempted to use <code>ssh ... echo 'Connection OK'</code> for connectivity testing, which
+returned &ldquo;Command not found&rdquo; because there is no shell.</span></p>
 </section>
 
 </article>
