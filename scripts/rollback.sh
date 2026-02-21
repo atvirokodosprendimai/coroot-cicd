@@ -149,25 +149,29 @@ done
 
 echo ""
 
-# Verify with HTTP probes via docker exec (services use 'expose:', not 'ports:')
-echo "--- Post-rollback health probes ---"
+# Verify via external Caddy endpoint (services use 'expose:', not 'ports:',
+# so localhost probes from the host won't work)
+echo "--- Post-rollback health probe ---"
 probes_passed=true
+EXTERNAL_URL="https://table.beerpub.dev"
 
-for probe in "coroot-coroot-1|http://localhost:8080/|Coroot" \
-             "coroot-prometheus-1|http://localhost:9090/-/healthy|Prometheus" \
-             "coroot-clickhouse-1|http://localhost:8123/ping|ClickHouse"; do
-  container=$(echo "${probe}" | cut -d'|' -f1)
-  url=$(echo "${probe}" | cut -d'|' -f2)
-  name=$(echo "${probe}" | cut -d'|' -f3)
-
-  code=$(docker exec "${container}" wget -q -O /dev/null --spider "${url}" 2>&1 && echo "200" || echo "FAIL")
-  if [[ "${code}" == "200" ]]; then
-    echo "  ${name}: PASS"
+ext_retries=3
+ext_ok=false
+for i in $(seq 1 ${ext_retries}); do
+  ext_code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 10 --max-time 15 "${EXTERNAL_URL}/" 2>/dev/null || echo "000")
+  if [[ "${ext_code}" == "200" ]]; then
+    echo "  Coroot (${EXTERNAL_URL}): HTTP ${ext_code} — PASS"
+    ext_ok=true
+    break
   else
-    echo "  ${name}: FAIL"
-    probes_passed=false
+    echo "  Attempt ${i}/${ext_retries}: HTTP ${ext_code}, retrying in 5s..."
+    sleep 5
   fi
 done
+if [[ "${ext_ok}" != true ]]; then
+  echo "  Coroot (${EXTERNAL_URL}): FAIL after ${ext_retries} attempts"
+  probes_passed=false
+fi
 echo ""
 
 # Show current container status

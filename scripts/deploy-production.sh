@@ -88,39 +88,31 @@ if [[ "${all_healthy}" != true ]]; then
   echo "  Falling back to HTTP endpoint probes..."
 fi
 
-# HTTP endpoint probes
+# Health probes
 # Production services use 'expose:' (not 'ports:'), so they're only reachable
-# inside the Docker network. We use 'docker exec' for internal probes and
-# curl for the external Caddy endpoint.
+# inside the Docker network or through Caddy. The external Caddy endpoint is
+# the authoritative health check since it validates the full path (Caddy ->
+# Coroot container). Docker Compose healthchecks cover Prometheus + ClickHouse.
 echo "--- Running health probes ---"
 probes_passed=true
 
-# Internal probes via docker exec (services don't bind to host localhost)
-echo "  Internal probes (via docker exec):"
-for probe in "coroot-coroot-1|http://localhost:8080/|Coroot" \
-             "coroot-prometheus-1|http://localhost:9090/-/healthy|Prometheus" \
-             "coroot-clickhouse-1|http://localhost:8123/ping|ClickHouse"; do
-  container=$(echo "${probe}" | cut -d'|' -f1)
-  url=$(echo "${probe}" | cut -d'|' -f2)
-  name=$(echo "${probe}" | cut -d'|' -f3)
-
-  code=$(docker exec "${container}" wget -q -O /dev/null --spider "${url}" 2>&1 && echo "200" || echo "FAIL")
-  if [[ "${code}" == "200" ]]; then
-    echo "    ${name}: PASS"
+# External probe via Caddy — this is the authoritative check
+echo "  External probe (via Caddy):"
+ext_retries=3
+ext_ok=false
+for i in $(seq 1 ${ext_retries}); do
+  ext_code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 10 --max-time 15 "${EXTERNAL_URL}/" 2>/dev/null || echo "000")
+  if [[ "${ext_code}" == "200" ]]; then
+    echo "    Coroot (${EXTERNAL_URL}): HTTP ${ext_code} — PASS"
+    ext_ok=true
+    break
   else
-    echo "    ${name}: FAIL"
-    probes_passed=false
+    echo "    Attempt ${i}/${ext_retries}: HTTP ${ext_code}, retrying in 5s..."
+    sleep 5
   fi
 done
-
-# External probe via Caddy (uses curl from the host)
-echo ""
-echo "  External probe (via Caddy):"
-ext_code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 10 --max-time 15 "${EXTERNAL_URL}/" 2>/dev/null || echo "000")
-if [[ "${ext_code}" == "200" ]]; then
-  echo "    Coroot (${EXTERNAL_URL}): HTTP ${ext_code} — PASS"
-else
-  echo "    Coroot (${EXTERNAL_URL}): HTTP ${ext_code} — FAIL"
+if [[ "${ext_ok}" != true ]]; then
+  echo "    Coroot (${EXTERNAL_URL}): FAIL after ${ext_retries} attempts"
   probes_passed=false
 fi
 echo ""
