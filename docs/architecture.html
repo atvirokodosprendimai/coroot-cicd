@@ -23,19 +23,22 @@ CI/CD infrastructure on the left, the Hetzner VPS with its Docker stack in the c
 and external services on the right.<label for="sn-d2" class="margin-toggle sidenote-number"></label><input
 type="checkbox" id="sn-d2" class="margin-toggle"/><span class="sidenote">Generated from
 <code>docs/architecture.d2</code> using <a href="https://d2lang.com">D2</a> with the ELK
-layout engine and theme 200 (dark). D2 is a declarative diagramming language&mdash;the source
-reads like a description of the system rather than coordinates and drawing commands.</span>
+layout engine. D2 is a declarative diagramming language&mdash;the source reads like a
+description of the system rather than coordinates and drawing commands. The neutral
+default theme produces a clean, greyscale diagram.</span>
 Dashed lines indicate conditional or optional paths; the red dashed line from Deploy to
 Rollback fires only on failure.</p>
 
 <figure class="fullwidth">
+  <div style="background:#fffff8; padding:1.5rem; border-radius:2px;">
   <object type="image/svg+xml" data="architecture.svg" style="width:100%">
     <img src="architecture.svg" alt="Coroot CI/CD Architecture Diagram">
   </object>
+  </div>
 </figure>
 
 <p>To regenerate after editing the source:</p>
-<pre><code>d2 --theme 200 --layout elk --pad 40 docs/architecture.d2 docs/architecture.svg</code></pre>
+<pre><code>d2 --theme 0 --layout elk --pad 40 docs/architecture.d2 docs/architecture.svg</code></pre>
 </section>
 
 <section>

@@ -1,152 +1,87 @@
 direction: right
 
-title: |md
-  # Coroot CI/CD Architecture
-  table.beerpub.dev
-|
-
 github: GitHub {
-  style.fill: "#161b22"
-  style.stroke: "#30363d"
-
-  repo: Git Repo {
-    shape: rectangle
-  }
+  repo: Git Repository
   actions: GitHub Actions {
-    shape: rectangle
+    check: 1. Check Updates
+    backup: 2. Backup
+    staging: 3. Staging
+    deploy: 4. Deploy
+    rollback: 5. Rollback
+    cleanup: 6. Cleanup
 
-    check: Check Updates
-    backup-job: Backup Job
-    staging-job: Staging Job
-    deploy-job: Deploy Job
-    rollback-job: Rollback Job
-    cleanup-job: Cleanup Job
-
-    check -> backup-job -> staging-job -> deploy-job -> cleanup-job
-    deploy-job -> rollback-job: on failure {
+    check -> backup -> staging -> deploy -> cleanup
+    deploy -> rollback: on failure {
       style.stroke-dash: 3
-      style.stroke: "#f85149"
     }
-    rollback-job -> cleanup-job
+    rollback -> cleanup
   }
-  secret-scan: Secret Scan {
-    shape: rectangle
-    style.fill: "#1c1e26"
+  scan: GitGuardian {
+    style.stroke-dash: 3
   }
   uptime: Uptime Monitor {
-    shape: rectangle
-    style.fill: "#1c1e26"
+    style.stroke-dash: 3
   }
 
   repo -> actions: triggers
-  repo -> secret-scan: pre-commit + push
+  repo -> scan: pre-commit
 }
 
-vps: Hetzner VPS (91.99.74.36) {
-  style.fill: "#1a1e2e"
-  style.stroke: "#30363d"
-
-  docker: Docker Engine {
-    style.fill: "#0d2137"
-    style.stroke: "#1f6feb"
-
-    coroot-stack: Coroot Stack (/opt/coroot) {
-      style.fill: "#0d2a1a"
-      style.stroke: "#3fb950"
-
-      caddy: Caddy {
-        shape: rectangle
-        style.fill: "#1a3a2a"
-      }
-      coroot: Coroot {
-        shape: rectangle
-        style.fill: "#1a3a2a"
-      }
-      prometheus: Prometheus {
-        shape: rectangle
-        style.fill: "#1a3a2a"
-      }
-      clickhouse: ClickHouse {
-        shape: rectangle
-        style.fill: "#1a3a2a"
-      }
-      node-agent: Node Agent {
-        shape: rectangle
-        style.fill: "#1a3a2a"
-      }
-      cluster-agent: Cluster Agent {
-        shape: rectangle
-        style.fill: "#1a3a2a"
-      }
+vps: Hetzner VPS {
+  docker: Docker {
+    stack: Production (/opt/coroot) {
+      caddy: Caddy
+      coroot: Coroot
+      prometheus: Prometheus
+      clickhouse: ClickHouse
+      node-agent: Node Agent
+      cluster-agent: Cluster Agent
 
       caddy -> coroot: reverse proxy
-      coroot -> prometheus: queries
-      coroot -> clickhouse: queries
-      node-agent -> coroot: eBPF metrics
-      cluster-agent -> prometheus: scrapes
+      coroot -> prometheus
+      coroot -> clickhouse
+      node-agent -> coroot: eBPF
+      cluster-agent -> prometheus: scrape
     }
 
-    staging: Staging Stack (/opt/coroot-staging) {
-      style.fill: "#2a2a1a"
-      style.stroke: "#d29922"
+    staging: Staging {
       style.stroke-dash: 3
     }
   }
 
   backups: Local Backups {
     shape: cylinder
-    style.fill: "#1a1e2e"
   }
 
-  docker -> backups: volume snapshots
+  docker -> backups: snapshots
 }
 
-external: External Services {
-  style.fill: "#1e1a2e"
-  style.stroke: "#30363d"
-
-  storagebox: Hetzner Storage Box {
+external: External {
+  storagebox: Storage Box {
     shape: cylinder
-    style.fill: "#2a1a2e"
   }
-  cloudflare: Cloudflare DNS {
-    shape: rectangle
-    style.fill: "#1a1e2e"
-  }
+  dns: Cloudflare DNS
   endpoint: table.beerpub.dev {
-    shape: rectangle
-    style.fill: "#0d2a1a"
-    style.stroke: "#3fb950"
-    style.font-size: 16
     style.bold: true
   }
 }
 
-# Cross-group connections
-github.actions -> vps.docker: SSH deploy {
-  style.stroke: "#58a6ff"
-}
-github.actions -> vps.docker.staging: validate {
-  style.stroke: "#d29922"
-  style.stroke-dash: 3
-}
-github.uptime -> external.endpoint: HTTP probe (5min) {
-  style.stroke: "#8b949e"
-  style.stroke-dash: 3
-}
-
-vps.backups -> external.storagebox: rsync over SSH {
-  style.stroke: "#bc8cff"
-}
-
-external.cloudflare -> external.endpoint: DNS A record
-external.endpoint -> vps.docker.coroot-stack.caddy: HTTPS {
-  style.stroke: "#3fb950"
-  style.stroke-width: 3
-}
-
-internet: Users / Browsers {
+users: Users {
   shape: cloud
-  style.fill: "#161b22"
 }
-internet -> external.endpoint: HTTPS
+
+# Connections
+github.actions -> vps.docker: SSH
+github.actions -> vps.docker.staging: validate {
+  style.stroke-dash: 3
+}
+github.uptime -> external.endpoint: probe {
+  style.stroke-dash: 3
+}
+
+vps.backups -> external.storagebox: rsync
+
+external.dns -> external.endpoint: A record
+external.endpoint -> vps.docker.stack.caddy: HTTPS
+
+users -> external.endpoint: HTTPS
