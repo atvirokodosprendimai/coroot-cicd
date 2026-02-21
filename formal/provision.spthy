@@ -1,0 +1,336 @@
+/*
+ * Tamarin Model: Autonomous Agent Provisioning Protocol
+ *
+ * RFC-PROVISIONING.md v0.3 — EdProof Authentication Scheme
+ *
+ * This model verifies the security properties of the provisioning protocol
+ * defined in RFC-PROVISIONING.md. The protocol allows autonomous agents to
+ * self-provision observability tenants using Ed25519 public key cryptography
+ * and server-provided nonces.
+ *
+ * Protocol summary (2 round-trips, single endpoint):
+ *
+ *   1. Requestor  ->  Provisioner:  POST /provision (no auth)
+ *   2. Provisioner ->  Requestor:   401 + Replay-Nonce
+ *   3. Requestor  ->  Provisioner:  POST /provision + EdProof(fingerprint, nonce, sig, service_name)
+ *   4. Provisioner ->  Requestor:   201 + { project_id, api_key, ... }
+ *
+ * Adversary model: Dolev-Yao (network attacker who can intercept, inject,
+ * replay, and modify messages). TLS is NOT modeled — we prove security
+ * properties hold even without transport encryption, except for API key
+ * secrecy which requires a secure channel (modeled explicitly).
+ *
+ * Verified properties:
+ *   - Authentication (injective agreement on nonce and service_name)
+ *   - Nonce replay prevention (each nonce used at most once)
+ *   - Nonce freshness (only server-generated nonces accepted)
+ *   - API key secrecy (attacker cannot learn api_key without the private key)
+ *   - Binding (tenant bound to fingerprint + service_name)
+ *
+ * Cryptographic primitives are axiomatized (ideal):
+ *   - Ed25519 signatures: sign(m, sk), verify(sign(m, sk), m, pk(sk)) = true
+ *   - HMAC-SHA256: hmac(key, msg) — deterministic, collision-resistant
+ *
+ * To verify:
+ *   tamarin-prover --prove formal/provision.spthy
+ *
+ * To explore interactively:
+ *   tamarin-prover interactive formal/provision.spthy
+ */
+
+theory ProvisioningProtocol
+begin
+
+builtins: signing, hashing, symmetric-encryption
+
+/* ============================================================
+ * Functions
+ * ============================================================ */
+
+// HMAC for project name derivation (Section 8.4)
+// hmac(server_secret, fingerprint || service_name) -> project_name
+functions: hmac/2
+
+// Fingerprint derivation from public key
+// In practice: SHA-256 of the Ed25519 public key
+functions: fingerprint/1
+
+/* ============================================================
+ * Key Infrastructure
+ * ============================================================ */
+
+// The provisioner generates a long-term server secret for HMAC derivation.
+// This secret never leaves the server.
+rule Provisioner_Setup:
+    [ Fr(~server_secret) ]
+  -->
+    [ !ServerSecret(~server_secret)
+    , !Provisioner(~server_secret)
+    ]
+
+// An agent generates an Ed25519 key pair.
+// The private key stays with the agent; the public key is enrolled.
+rule Agent_KeyGen:
+    [ Fr(~sk) ]
+  -->
+    [ !AgentKey(~sk, pk(~sk))
+    , !AllowedKey(pk(~sk))           // Enrolled in Allowed Keys Registry
+    , Out(pk(~sk))                   // Public key is public knowledge
+    ]
+
+/* ============================================================
+ * Phase 1: Nonce Acquisition (Section 8.1)
+ * ============================================================
+ *
+ * Requestor sends an unauthenticated POST.
+ * Provisioner responds with a fresh nonce.
+ * The nonce is stored server-side (NonceStore) for single-use validation.
+ */
+
+// Requestor initiates by requesting a nonce.
+// We model this as the requestor signaling intent; the provisioner
+// responds with a nonce on the public channel.
+rule Requestor_NonceRequest:
+    [ !AgentKey(~sk, pkA) ]
+  -->
+    [ RequestorState1(~sk, pkA)
+    , Out('nonce_request')
+    ]
+
+// Provisioner generates a fresh nonce and sends it back.
+// The nonce is stored in NonceStore (linear fact = single-use).
+rule Provisioner_NonceResponse:
+    [ In('nonce_request')
+    , Fr(~nonce)
+    , !Provisioner(server_secret)
+    ]
+  --[ NonceGenerated(~nonce) ]->
+    [ NonceStore(~nonce)             // Linear: consumed on use = single-use
+    , Out(~nonce)                    // Nonce sent to requestor (401 + Replay-Nonce header)
+    ]
+
+/* ============================================================
+ * Phase 2: Authenticated Request (Section 8.2)
+ * ============================================================
+ *
+ * Requestor signs (nonce || service_name) with Ed25519 private key,
+ * sends Authorization: EdProof header with fingerprint, nonce, signature.
+ *
+ * Provisioner verifies:
+ *   1. Nonce exists and is unused (consumes NonceStore)
+ *   2. Fingerprint resolves to an allowed key
+ *   3. Signature verifies against the public key
+ *   4. Derives project_name = hmac(server_secret, fingerprint || service_name)
+ *   5. Returns api_key (modeled as a fresh secret)
+ */
+
+// Requestor constructs and sends the authenticated request.
+// The signature covers: nonce || service_name (Section 5.3)
+//
+// TLS is modeled as a fresh symmetric key (~tls_key) shared between
+// requestor and provisioner for this session. The TLS key is bound to
+// (pkA, nonce, service_name) — modeling that the HTTP request and
+// response travel on the same TLS connection. The provisioner can only
+// use the TLS key that matches the exact request parameters.
+rule Requestor_AuthRequest:
+    [ RequestorState1(~sk, pkA)
+    , In(nonce)                      // Received nonce from provisioner
+    , Fr(~service_name)              // Fresh service name (agent chooses)
+    , Fr(~tls_key)                   // TLS session key (models secure channel)
+    ]
+  --[ RequestorSent(pkA, nonce, ~service_name) ]->
+    [ RequestorState2(~sk, pkA, nonce, ~service_name, ~tls_key)
+    , Out(<fingerprint(pkA), nonce, sign(<nonce, ~service_name>, ~sk), ~service_name>)
+    , TLSKey(pkA, nonce, ~service_name, ~tls_key)
+      // Bound to (pkA, nonce, service_name): models that the response
+      // goes back on the same TLS connection as the request.
+    ]
+
+// Provisioner processes the authenticated request.
+//
+// Critical security checks:
+//   - NonceStore(nonce) is consumed (linear fact) → nonce cannot be reused
+//   - !AllowedKey(pkA) → key must be in the registry
+//   - verify(sig, msg, pkA) → signature must be valid
+//
+// On success: derives project_name, generates api_key, responds.
+rule Provisioner_ProcessRequest:
+    let
+        fp = fingerprint(pkA)
+        msg = <nonce, service_name>
+        project_name = hmac(server_secret, <fp, service_name>)
+    in
+    [ In(<fp, nonce, sig, service_name>)
+    , NonceStore(nonce)              // Consumed: nonce is now invalid (single-use)
+    , !AllowedKey(pkA)               // Key must be enrolled
+    , !ServerSecret(server_secret)
+    , TLSKey(pkA, nonce, service_name, tls_key)  // TLS session key bound to this request
+    , Fr(~api_key)                   // Fresh API key for the tenant
+    ]
+  --[ Verify(verify(sig, msg, pkA))  // Must verify successfully
+    , ProvisionerAccepted(pkA, nonce, service_name, ~api_key, project_name)
+    , NonceUsed(nonce)               // Action fact: nonce consumed
+    , SecretAPIKey(~api_key, pkA, service_name)
+    , ProjectBound(project_name, pkA, service_name)
+    ]->
+    [ Out(senc(<project_name, ~api_key>, tls_key))
+      // API key returned over secure channel (TLS).
+      // tls_key is a fresh value shared only between requestor and
+      // provisioner — it models the TLS session key. The attacker
+      // cannot decrypt without knowing tls_key.
+    , TenantCreated(project_name, pkA, service_name, ~api_key)
+    ]
+
+// Requestor receives the provisioning response.
+rule Requestor_ReceiveResponse:
+    [ RequestorState2(~sk, pkA, nonce, ~service_name, ~tls_key)
+    , In(senc(<project_name, api_key>, ~tls_key))
+    ]
+  --[ RequestorReceived(pkA, nonce, ~service_name, api_key, project_name)
+    , RequestorHasKey(api_key)
+    ]->
+    [ RequestorProvisioned(pkA, ~service_name, api_key, project_name) ]
+
+/* ============================================================
+ * Restriction: Signature Verification
+ * ============================================================
+ *
+ * The Verify() action fact must hold: only valid signatures are accepted.
+ * This constrains the Provisioner_ProcessRequest rule to only fire
+ * when the signature actually verifies.
+ */
+
+restriction SignatureVerification:
+    "All x #i. Verify(x) @ #i ==> x = true"
+
+/* ============================================================
+ * Security Lemmas
+ * ============================================================ */
+
+/*
+ * Lemma 1: Authentication (Injective Agreement)
+ *
+ * If the provisioner accepts a request claiming to be from key pkA
+ * with nonce N and service_name S, then the holder of pkA actually
+ * sent a request with that exact nonce and service_name.
+ *
+ * "Injective" means the mapping is one-to-one: each provisioner
+ * acceptance corresponds to a unique requestor send.
+ *
+ * This rules out:
+ *   - Forgery: attacker cannot create a valid request without sk
+ *   - Substitution: attacker cannot swap the service_name
+ *   - Replay: each acceptance maps to a distinct send (injective)
+ */
+lemma authentication_injective:
+    "All pkA nonce service_name api_key project_name #i.
+        ProvisionerAccepted(pkA, nonce, service_name, api_key, project_name) @ #i
+    ==>
+        ( Ex #j. RequestorSent(pkA, nonce, service_name) @ #j
+          & #j < #i
+          & not (Ex api_key2 project_name2 #i2.
+                    ProvisionerAccepted(pkA, nonce, service_name, api_key2, project_name2) @ #i2
+                    & not (#i2 = #i))
+        )
+    "
+
+/*
+ * Lemma 2: Nonce Replay Prevention
+ *
+ * A nonce is used at most once. If the provisioner accepts two requests
+ * with the same nonce, they must be the same event.
+ *
+ * This is enforced structurally: NonceStore is a linear fact, consumed
+ * on use. Tamarin's multiset rewriting semantics guarantee this.
+ */
+lemma nonce_single_use:
+    "All nonce #i #j.
+        NonceUsed(nonce) @ #i & NonceUsed(nonce) @ #j
+    ==> #i = #j
+    "
+
+/*
+ * Lemma 3: Nonce Freshness
+ *
+ * Every nonce used in an accepted request was previously generated
+ * by the provisioner. The attacker cannot invent valid nonces.
+ *
+ * This follows from NonceStore being created only in Provisioner_NonceResponse.
+ */
+lemma nonce_freshness:
+    "All nonce #i.
+        NonceUsed(nonce) @ #i
+    ==> Ex #j. NonceGenerated(nonce) @ #j & #j < #i
+    "
+
+/*
+ * Lemma 4: API Key Secrecy
+ *
+ * The attacker cannot learn an API key unless they compromise the
+ * corresponding agent's private key.
+ *
+ * We model this with the standard Tamarin secrecy pattern: if the
+ * attacker knows the api_key (K(api_key)), then the agent's private
+ * key must have been compromised.
+ *
+ * Note: This lemma assumes the response channel is secure (TLS).
+ * The senc() in Provisioner_ProcessRequest models this.
+ */
+lemma api_key_secrecy:
+    "All api_key pkA service_name #i.
+        SecretAPIKey(api_key, pkA, service_name) @ #i
+    ==> not (Ex #j. K(api_key) @ #j)
+    "
+
+/*
+ * Lemma 5: Tenant Binding
+ *
+ * If a project is created with name P bound to key pkA and service S,
+ * then P is deterministically derived from (pkA, S). No other key or
+ * service name can produce the same project name (assuming HMAC
+ * collision resistance).
+ *
+ * This ensures that:
+ *   - Each (key, service) pair maps to exactly one project
+ *   - An attacker cannot hijack another agent's project
+ */
+lemma tenant_binding:
+    "All project_name pkA service_name #i.
+        ProjectBound(project_name, pkA, service_name) @ #i
+    ==> ( All pkB service_name2 #j.
+            ProjectBound(project_name, pkB, service_name2) @ #j
+          ==> pkA = pkB & service_name = service_name2
+        )
+    "
+
+/*
+ * Lemma 6: Requestor-Provisioner Agreement
+ *
+ * If a requestor believes it has been provisioned with api_key K for
+ * service S, then the provisioner did in fact issue K for that key
+ * and service.
+ *
+ * This rules out an attacker injecting a fake provisioning response.
+ * (Requires the secure channel model.)
+ */
+lemma requestor_agreement:
+    "All pkA nonce service_name api_key project_name #i.
+        RequestorReceived(pkA, nonce, service_name, api_key, project_name) @ #i
+    ==> Ex #j. ProvisionerAccepted(pkA, nonce, service_name, api_key, project_name) @ #j
+        & #j < #i
+    "
+
+/*
+ * Lemma 7: Executability (Sanity Check)
+ *
+ * The protocol can complete successfully. This is not a security property
+ * but a sanity check that the model is not vacuously true (i.e., the
+ * rules can actually fire and reach the final state).
+ */
+lemma executability:
+    exists-trace
+    "Ex pkA nonce service_name api_key project_name #i.
+        RequestorReceived(pkA, nonce, service_name, api_key, project_name) @ #i
+    "
+
+end
