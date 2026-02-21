@@ -3,222 +3,219 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Coroot CI/CD — Documentation</title>
+<title>Coroot CI/CD</title>
+<link rel="stylesheet" href="tufte.css"/>
 <style>
-  :root {
-    --bg: #0d1117;
-    --surface: #161b22;
-    --border: #30363d;
-    --text: #c9d1d9;
-    --text-muted: #8b949e;
-    --link: #58a6ff;
-    --accent: #3fb950;
-  }
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
-    font-size: 15px;
-    line-height: 1.6;
-  }
-  .container { max-width: 960px; margin: 0 auto; padding: 48px 24px; }
-  h1 {
-    font-size: 32px;
-    font-weight: 700;
-    margin-bottom: 8px;
-  }
-  .subtitle {
-    color: var(--text-muted);
-    font-size: 16px;
-    margin-bottom: 48px;
-  }
-  .cards {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-    gap: 16px;
-    margin-bottom: 48px;
-  }
-  .card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 24px;
-    text-decoration: none;
-    color: var(--text);
-    transition: border-color 0.15s, transform 0.15s;
-    display: block;
-  }
-  .card:hover {
-    border-color: var(--link);
-    transform: translateY(-2px);
-    text-decoration: none;
-  }
-  .card h2 {
-    font-size: 18px;
-    font-weight: 600;
-    margin-bottom: 8px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .card p { color: var(--text-muted); font-size: 14px; }
-  .card .tag {
+  /* Dark mode override for Tufte CSS */
+  body { background: #151515; color: #e0e0e0; }
+  a, a:link { color: #7eb8da; }
+  h1, h2, h3 { color: #f0f0f0; }
+  .sidenote, .marginnote { color: #a0a0a0; }
+  code, pre > code { color: #d4d4d4; background: #1e1e1e; }
+  pre { border-left: 2px solid #333; }
+  hr { border-color: #333; }
+  blockquote { border-left: 3px solid #333; }
+  blockquote footer { color: #888; }
+  table { border-collapse: collapse; width: 100%; }
+  th { color: #a0a0a0; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em;
+       border-bottom: 1px solid #333; padding: 0.5rem 0.75rem; text-align: left; }
+  td { padding: 0.5rem 0.75rem; border-bottom: 1px solid #222; }
+  .nav-links { margin: 2rem 0; }
+  .nav-links a {
     display: inline-block;
-    background: rgba(88,166,255,0.15);
-    color: var(--link);
-    font-size: 11px;
-    font-weight: 500;
-    padding: 2px 8px;
-    border-radius: 10px;
-    margin-top: 12px;
-  }
-  .section { margin-bottom: 48px; }
-  .section h2 {
-    font-size: 20px;
-    font-weight: 600;
-    margin-bottom: 16px;
-    padding-bottom: 8px;
-    border-bottom: 1px solid var(--border);
-  }
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 14px;
-  }
-  th, td {
-    text-align: left;
-    padding: 10px 12px;
-    border-bottom: 1px solid var(--border);
-  }
-  th { color: var(--text-muted); font-weight: 500; font-size: 12px; text-transform: uppercase; }
-  code {
-    background: var(--surface);
-    padding: 2px 6px;
+    padding: 0.6rem 1.2rem;
+    border: 1px solid #333;
     border-radius: 4px;
-    font-size: 13px;
-    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+    margin-right: 0.5rem;
+    margin-bottom: 0.5rem;
+    color: #7eb8da;
+    text-decoration: none;
+    font-size: 0.9rem;
   }
-  a { color: var(--link); text-decoration: none; }
-  a:hover { text-decoration: underline; }
-  .flow {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 24px;
-    font-family: 'SFMono-Regular', Consolas, monospace;
-    font-size: 13px;
-    line-height: 1.8;
-    color: var(--text-muted);
+  .nav-links a:hover { border-color: #7eb8da; background: #1a2633; }
+  .status-ok { color: #6fbf73; }
+  .status-warn { color: #d4a846; }
+  .flow-diagram {
+    background: #1a1a1a;
+    padding: 1.5rem;
+    border-radius: 4px;
+    font-family: Consolas, 'Liberation Mono', monospace;
+    font-size: 0.85rem;
+    line-height: 1.9;
     overflow-x: auto;
+    color: #999;
   }
-  .flow .highlight { color: var(--accent); font-weight: 600; }
-  .flow .dim { color: #484f58; }
-  .footer {
-    border-top: 1px solid var(--border);
-    padding-top: 24px;
-    color: var(--text-muted);
-    font-size: 13px;
-    text-align: center;
-  }
+  .flow-diagram .job { color: #6fbf73; font-weight: bold; }
+  .flow-diagram .desc { color: #888; }
+  .flow-diagram .cond { color: #d4a846; }
 </style>
 </head>
 <body>
-<div class="container">
+<article>
 
-  <h1>Coroot CI/CD</h1>
-  <p class="subtitle">Auto-update pipeline for the Coroot observability stack on table.beerpub.dev</p>
+<h1>Coroot CI/CD</h1>
+<p class="subtitle">Automated update pipeline for the Coroot observability stack</p>
 
-  <div class="cards">
-    <a class="card" href="pipeline.html">
-      <h2>Pipeline Status</h2>
-      <p>Real-time visualization of GitHub Actions workflow runs. See job status, duration, and history with live data from the GitHub API.</p>
-      <span class="tag">D3.js &middot; Live Data</span>
-    </a>
-    <a class="card" href="architecture.html">
-      <h2>Architecture Diagram</h2>
-      <p>System architecture showing all components: VPS, Docker stack, CI/CD pipeline jobs, backups, DNS, and monitoring.</p>
-      <span class="tag">D2 &middot; SVG</span>
-    </a>
-  </div>
+<section>
+<p>
+<span class="newthought">This system keeps</span> a Coroot observability platform
+at <a href="https://table.beerpub.dev">table.beerpub.dev</a> automatically up to date.
+<label for="sn-stack" class="margin-toggle sidenote-number"></label>
+<input type="checkbox" id="sn-stack" class="margin-toggle"/>
+<span class="sidenote">The stack consists of Coroot, Prometheus, ClickHouse, two agents (node + cluster),
+and Caddy as the reverse proxy with automatic TLS. All services run as Docker containers on a single
+Hetzner ARM VPS.</span>
+A GitHub Actions workflow runs weekly, checks for new container image releases,
+validates them in a staging environment, backs up all data, deploys to production,
+and rolls back automatically if anything goes wrong.
+</p>
 
-  <div class="section">
-    <h2>Pipeline Flow</h2>
-    <div class="flow">
-<span class="dim">Schedule (Mon 04:00 UTC) or Manual Trigger</span>
-  <span class="dim">|</span>
-  <span class="highlight">1. Check Updates</span>    <span class="dim">Compare running vs latest image digests</span>
-  <span class="dim">|  -> Exit early if all images current (unless force_deploy)</span>
-  <span class="dim">|</span>
-  <span class="highlight">2. Backup Volumes</span>   <span class="dim">Snapshot all 8 Docker volumes (~330MB)</span>
-  <span class="dim">|  -> Sync to Hetzner Storage Box (off-site)</span>
-  <span class="dim">|  -> Retain last 3 backups</span>
-  <span class="dim">|</span>
-  <span class="highlight">3. Staging</span>           <span class="dim">Deploy to /opt/coroot-staging/, validate, tear down</span>
-  <span class="dim">|  -> Abort if staging fails (production untouched)</span>
-  <span class="dim">|</span>
-  <span class="highlight">4. Deploy</span>            <span class="dim">docker compose pull && up -d</span>
-  <span class="dim">|  -> Health check via https://table.beerpub.dev</span>
-  <span class="dim">|</span>
-  <span class="dim">|--[on failure]--></span> <span class="highlight">5. Rollback</span>   <span class="dim">Restore volumes, restart, verify</span>
-  <span class="dim">|</span>
-  <span class="highlight">6. Cleanup</span>           <span class="dim">Tear down staging, prune dangling images</span>
-    </div>
-  </div>
-
-  <div class="section">
-    <h2>Components</h2>
-    <table>
-      <thead><tr><th>Component</th><th>Role</th><th>Location</th></tr></thead>
-      <tbody>
-        <tr><td>Coroot</td><td>Observability platform</td><td>VPS Docker</td></tr>
-        <tr><td>Prometheus</td><td>Metrics TSDB</td><td>VPS Docker</td></tr>
-        <tr><td>ClickHouse</td><td>Logs/traces/profiles</td><td>VPS Docker</td></tr>
-        <tr><td>Node Agent</td><td>eBPF host metrics</td><td>VPS Docker</td></tr>
-        <tr><td>Cluster Agent</td><td>Metrics scraper</td><td>VPS Docker</td></tr>
-        <tr><td>Caddy</td><td>Reverse proxy + TLS</td><td>VPS Docker</td></tr>
-        <tr><td>GitHub Actions</td><td>CI/CD pipeline</td><td>GitHub</td></tr>
-        <tr><td>Uptime Monitor</td><td>5-min health checks</td><td>GitHub Actions</td></tr>
-        <tr><td>GitGuardian</td><td>Secret scanning</td><td>Pre-commit + CI</td></tr>
-        <tr><td>Storage Box</td><td>Off-site backups</td><td>Hetzner</td></tr>
-        <tr><td>Cloudflare</td><td>DNS</td><td>External</td></tr>
-      </tbody>
-    </table>
-  </div>
-
-  <div class="section">
-    <h2>Scripts</h2>
-    <table>
-      <thead><tr><th>Script</th><th>Purpose</th><th>Dry-run</th></tr></thead>
-      <tbody>
-        <tr><td><code>check-updates.sh</code></td><td>Compare running vs remote image digests</td><td><code>--dry-run</code></td></tr>
-        <tr><td><code>backup-volumes.sh</code></td><td>Snapshot all Docker volumes</td><td><code>--dry-run</code></td></tr>
-        <tr><td><code>deploy-staging.sh</code></td><td>Deploy staging stack &amp; validate</td><td><code>--dry-run</code></td></tr>
-        <tr><td><code>deploy-production.sh</code></td><td>Pull, deploy, health check</td><td><code>--dry-run</code></td></tr>
-        <tr><td><code>health-check.sh</code></td><td>Reusable HTTP health probe</td><td><code>--dry-run</code></td></tr>
-        <tr><td><code>rollback.sh</code></td><td>Restore volumes from backup</td><td><code>--dry-run</code></td></tr>
-        <tr><td><code>sync-remote-backup.sh</code></td><td>Sync backups to Storage Box</td><td><code>--dry-run</code></td></tr>
-      </tbody>
-    </table>
-  </div>
-
-  <div class="section">
-    <h2>Quick Links</h2>
-    <table>
-      <thead><tr><th>Resource</th><th>URL</th></tr></thead>
-      <tbody>
-        <tr><td>Production</td><td><a href="https://table.beerpub.dev" target="_blank">https://table.beerpub.dev</a></td></tr>
-        <tr><td>GitHub Repo</td><td><a href="https://github.com/atvirokodosprendimai/coroot-cicd" target="_blank">atvirokodosprendimai/coroot-cicd</a></td></tr>
-        <tr><td>Actions</td><td><a href="https://github.com/atvirokodosprendimai/coroot-cicd/actions" target="_blank">Workflow Runs</a></td></tr>
-        <tr><td>VPS SSH</td><td><code>ssh -i ~/.ssh/coroot-table root@91.99.74.36</code></td></tr>
-      </tbody>
-    </table>
-  </div>
-
-  <div class="footer">
-    Coroot CI/CD &middot; Hetzner VPS 91.99.74.36 &middot; table.beerpub.dev
-  </div>
-
+<div class="nav-links">
+  <a href="pipeline.html">Pipeline Status (live)</a>
+  <a href="architecture.html">Architecture Diagram</a>
+  <a href="https://github.com/atvirokodosprendimai/coroot-cicd" target="_blank">GitHub Repository</a>
+  <a href="https://table.beerpub.dev" target="_blank">Production Endpoint</a>
 </div>
+</section>
+
+<section>
+<h2>Pipeline Flow</h2>
+<p>The pipeline is a six-job sequence with conditional rollback. Each job depends on the previous one;
+if staging fails, production is never touched.</p>
+<label for="mn-rollback" class="margin-toggle">&#8853;</label>
+<input type="checkbox" id="mn-rollback" class="margin-toggle"/>
+<span class="marginnote">The rollback job uses a precise trigger condition:
+<code>always() && needs.deploy.result == 'failure'</code>.
+This prevents rollback from firing when upstream jobs (like staging) fail&mdash;a lesson
+learned the hard way during initial testing. See the <a href="https://github.com/atvirokodosprendimai/coroot-cicd/blob/main/POSTMORTEM.md">postmortem</a>.</span>
+
+<div class="flow-diagram">
+<span class="desc">Schedule (Mon 04:00 UTC) or Manual Trigger</span>
+  <span class="desc">|</span>
+  <span class="job">1. Check Updates</span>    <span class="desc">Compare running vs latest image digests</span>
+  <span class="desc">|  &rarr; Exit early if all images current (unless force_deploy)</span>
+  <span class="desc">|</span>
+  <span class="job">2. Backup Volumes</span>   <span class="desc">Snapshot all 8 Docker volumes (~330 MB)</span>
+  <span class="desc">|  &rarr; Sync to Hetzner Storage Box (off-site)</span>
+  <span class="desc">|  &rarr; Retain last 3 backups</span>
+  <span class="desc">|</span>
+  <span class="job">3. Staging</span>           <span class="desc">Deploy to /opt/coroot-staging/, validate, tear down</span>
+  <span class="desc">|  &rarr; Abort if staging fails (production untouched)</span>
+  <span class="desc">|</span>
+  <span class="job">4. Deploy</span>            <span class="desc">docker compose pull && up -d</span>
+  <span class="desc">|  &rarr; Health check via https://table.beerpub.dev</span>
+  <span class="desc">|</span>
+  <span class="desc">|--[<span class="cond">on failure</span>]--&gt;</span> <span class="job">5. Rollback</span>   <span class="desc">Restore volumes, restart, verify</span>
+  <span class="desc">|</span>
+  <span class="job">6. Cleanup</span>           <span class="desc">Tear down staging, prune dangling images</span>
+</div>
+</section>
+
+<section>
+<h2>Infrastructure</h2>
+<p>
+<span class="newthought">Everything runs</span> on a single Hetzner CAX11 (ARM, Ubuntu 24.04)
+at 91.99.74.36.
+<label for="sn-expose" class="margin-toggle sidenote-number"></label>
+<input type="checkbox" id="sn-expose" class="margin-toggle"/>
+<span class="sidenote">Production services use Docker's <code>expose:</code> directive rather than <code>ports:</code>.
+This means they are <em>not</em> reachable from the host via <code>localhost:&lt;port&gt;</code>.
+Only Caddy binds to ports 80/443. All health checks must go through the external
+Caddy endpoint or use <code>docker exec</code>. This is a deliberate security choice.</span>
+Caddy handles TLS termination and reverse proxying. DNS is managed via Cloudflare.
+</p>
+
+<table>
+<thead><tr><th>Component</th><th>Role</th><th>Notes</th></tr></thead>
+<tbody>
+  <tr><td>Coroot</td><td>Observability platform</td><td>ghcr.io/coroot/coroot:latest</td></tr>
+  <tr><td>Prometheus</td><td>Metrics TSDB</td><td>prom/prometheus:v2.53.5</td></tr>
+  <tr><td>ClickHouse</td><td>Logs, traces, profiles</td><td>clickhouse/clickhouse-server:24.3</td></tr>
+  <tr><td>Node Agent</td><td>eBPF host metrics</td><td>ghcr.io/coroot/coroot-node-agent:latest</td></tr>
+  <tr><td>Cluster Agent</td><td>Metrics scraper</td><td>ghcr.io/coroot/coroot-cluster-agent:latest</td></tr>
+  <tr><td>Caddy</td><td>Reverse proxy, auto-TLS</td><td>caddy:2 &mdash; only service with host ports</td></tr>
+</tbody>
+</table>
+</section>
+
+<section>
+<h2>Scripts</h2>
+<p>Each script supports a <code>--dry-run</code> flag that reports what <em>would</em> happen without making changes.
+All scripts are designed to be piped over SSH:</p>
+<label for="mn-dryrun" class="margin-toggle">&#8853;</label>
+<input type="checkbox" id="mn-dryrun" class="margin-toggle"/>
+<span class="marginnote">The <code>--dry-run</code> mode was added after the initial pipeline tests
+revealed that scripts needed a safe way to validate logic without touching production.
+In dry-run mode, the backup script estimates volume sizes, the deploy script shows
+current images and probes the endpoint, and the rollback script lists backup contents.</span>
+
+<pre><code>ssh -i ~/.ssh/coroot-table root@91.99.74.36 'bash -s -- --dry-run' < scripts/deploy-production.sh</code></pre>
+
+<table>
+<thead><tr><th>Script</th><th>Purpose</th></tr></thead>
+<tbody>
+  <tr><td><code>check-updates.sh</code></td><td>Compare running vs remote image digests</td></tr>
+  <tr><td><code>backup-volumes.sh</code></td><td>Snapshot all Docker volumes, prune old backups</td></tr>
+  <tr><td><code>deploy-staging.sh</code></td><td>Deploy staging stack, validate, tear down</td></tr>
+  <tr><td><code>deploy-production.sh</code></td><td>Pull latest images, deploy, health check</td></tr>
+  <tr><td><code>health-check.sh</code></td><td>Reusable HTTP health probe (supports --staging, --external)</td></tr>
+  <tr><td><code>rollback.sh</code></td><td>Restore volumes from backup, restart, verify</td></tr>
+  <tr><td><code>sync-remote-backup.sh</code></td><td>Sync local backups to Hetzner Storage Box via rsync</td></tr>
+</tbody>
+</table>
+</section>
+
+<section>
+<h2>Backups</h2>
+<p>
+<span class="newthought">Before every update,</span> all eight Docker volumes are backed up
+to <code>/opt/coroot/backups/&lt;timestamp&gt;/</code>.
+<label for="sn-backupsize" class="margin-toggle sidenote-number"></label>
+<input type="checkbox" id="sn-backupsize" class="margin-toggle"/>
+<span class="sidenote">Total compressed backup size is approximately 330 MB.
+ClickHouse data accounts for 327 MB of that. The backup/restore cycle
+takes about 3 minutes.</span>
+The last three backups are retained locally; older ones are pruned automatically.
+After the local backup completes, the pipeline syncs it to a Hetzner Storage Box
+via rsync over SSH (port 23) for off-site redundancy.
+</p>
+</section>
+
+<section>
+<h2>Monitoring</h2>
+<p>Three independent monitoring layers protect the system:</p>
+<label for="sn-healthcheck" class="margin-toggle sidenote-number"></label>
+<input type="checkbox" id="sn-healthcheck" class="margin-toggle"/>
+<span class="sidenote">Coroot's Docker healthcheck takes over 120 seconds to converge on cold starts
+due to cache warming. The pipeline treats the external HTTP 200 response as
+authoritative, regardless of Docker's healthcheck status.</span>
+
+<table>
+<thead><tr><th>Layer</th><th>Mechanism</th><th>Frequency</th></tr></thead>
+<tbody>
+  <tr><td>Pipeline health probes</td><td>curl https://table.beerpub.dev (3 retries)</td><td>On every deploy</td></tr>
+  <tr><td>Uptime monitor</td><td>GitHub Actions cron &rarr; auto-creates issues</td><td>Every 5 minutes</td></tr>
+  <tr><td>Secret scanning</td><td>GitGuardian ggshield (pre-commit + CI)</td><td>Every commit/push</td></tr>
+</tbody>
+</table>
+</section>
+
+<section>
+<h2>Quick Reference</h2>
+<table>
+<thead><tr><th>Resource</th><th>Value</th></tr></thead>
+<tbody>
+  <tr><td>Production URL</td><td><a href="https://table.beerpub.dev">https://table.beerpub.dev</a></td></tr>
+  <tr><td>VPS SSH</td><td><code>ssh -i ~/.ssh/coroot-table root@91.99.74.36</code></td></tr>
+  <tr><td>Stack location</td><td><code>/opt/coroot/</code></td></tr>
+  <tr><td>Backup location</td><td><code>/opt/coroot/backups/</code></td></tr>
+  <tr><td>GitHub Actions</td><td><a href="https://github.com/atvirokodosprendimai/coroot-cicd/actions">Workflow runs</a></td></tr>
+  <tr><td>Schedule</td><td>Monday 04:00 UTC (weekly)</td></tr>
+  <tr><td>Manual trigger</td><td>Options: force_deploy, skip_staging, skip_backup, dry_run</td></tr>
+</tbody>
+</table>
+</section>
+
+</article>
 </body>
 </html>

@@ -4,74 +4,96 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Architecture — Coroot CI/CD</title>
+<link rel="stylesheet" href="tufte.css"/>
 <style>
-  :root {
-    --bg: #0d1117;
-    --surface: #161b22;
-    --border: #30363d;
-    --text: #c9d1d9;
-    --text-muted: #8b949e;
-    --link: #58a6ff;
-  }
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
-  }
-  .header {
-    padding: 24px 32px;
-    border-bottom: 1px solid var(--border);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-  .header h1 { font-size: 20px; font-weight: 600; }
-  .header a {
-    color: var(--link);
-    text-decoration: none;
-    font-size: 14px;
-  }
-  .header a:hover { text-decoration: underline; }
+  body { background: #151515; color: #e0e0e0; }
+  a, a:link { color: #7eb8da; }
+  h1, h2, h3 { color: #f0f0f0; }
+  .sidenote, .marginnote { color: #a0a0a0; }
+  code { color: #d4d4d4; background: #1e1e1e; }
   .diagram-container {
-    padding: 24px;
-    display: flex;
-    justify-content: center;
-    overflow: auto;
+    margin: 2rem 0;
+    padding: 1.5rem;
+    background: #1a1a1a;
+    border-radius: 4px;
+    overflow-x: auto;
+    text-align: center;
   }
-  .diagram-container img, .diagram-container object {
+  .diagram-container object, .diagram-container img {
     max-width: 100%;
     height: auto;
   }
-  .info {
-    padding: 16px 32px;
-    border-top: 1px solid var(--border);
-    color: var(--text-muted);
-    font-size: 13px;
-    text-align: center;
-  }
-  .info code {
-    background: var(--surface);
-    padding: 2px 6px;
-    border-radius: 4px;
-    font-family: 'SFMono-Regular', Consolas, monospace;
-    font-size: 12px;
+  .regen {
+    margin-top: 1rem;
+    color: #888;
+    font-size: 0.8rem;
   }
 </style>
 </head>
 <body>
-  <div class="header">
-    <h1>Architecture Diagram</h1>
-    <a href="index.html">Back to overview</a>
-  </div>
+<article>
+
+<h1>Architecture</h1>
+<p class="subtitle"><a href="index.html">&larr; Back to overview</a></p>
+
+<section>
+<p>
+<span class="newthought">The diagram below</span> shows the complete system architecture:
+GitHub CI/CD infrastructure on the left, the Hetzner VPS with its Docker stack in the center,
+and external services on the right.
+<label for="sn-d2" class="margin-toggle sidenote-number"></label>
+<input type="checkbox" id="sn-d2" class="margin-toggle"/>
+<span class="sidenote">Generated from <code>docs/architecture.d2</code> using
+<a href="https://d2lang.com">D2</a> with the ELK layout engine and dark theme (200).
+D2 is a declarative diagramming language that produces clean, readable SVG output.</span>
+</p>
+
+<figure class="fullwidth">
   <div class="diagram-container">
-    <object type="image/svg+xml" data="architecture.svg" style="width:100%;max-width:1400px;">
+    <object type="image/svg+xml" data="architecture.svg">
       <img src="architecture.svg" alt="Coroot CI/CD Architecture Diagram">
     </object>
   </div>
-  <div class="info">
-    Generated from <code>docs/architecture.d2</code> using D2.
-    Regenerate with: <code>d2 --theme 200 --layout elk --pad 40 docs/architecture.d2 docs/architecture.svg</code>
-  </div>
+</figure>
+
+<p class="regen">
+Regenerate: <code>d2 --theme 200 --layout elk --pad 40 docs/architecture.d2 docs/architecture.svg</code>
+</p>
+</section>
+
+<section>
+<h2>Key Design Decisions</h2>
+
+<p>
+<span class="newthought">Services use <code>expose:</code></span> rather than <code>ports:</code>.
+<label for="sn-expose" class="margin-toggle sidenote-number"></label>
+<input type="checkbox" id="sn-expose" class="margin-toggle"/>
+<span class="sidenote">This was the root cause of the first three pipeline test failures.
+Health checks attempted <code>curl http://localhost:8080</code> from the host, which returned
+connection refused because the port was only open inside the Docker network.
+See the <a href="https://github.com/atvirokodosprendimai/coroot-cicd/blob/main/POSTMORTEM.md">postmortem</a>
+for the full incident timeline.</span>
+Only Caddy binds to the host network (ports 80 and 443). All other services are reachable
+only within the Docker network or through Caddy's reverse proxy. This reduces the attack
+surface to a single entry point.
+</p>
+
+<p>
+<span class="newthought">The external Caddy endpoint</span> is the sole authoritative health check.
+Internal probes via <code>docker exec</code> proved unreliable for Coroot specifically.
+The pipeline probes <code>https://table.beerpub.dev</code> with three retries and 15-second
+timeouts as the definitive signal of production health.
+</p>
+
+<p>
+<span class="newthought">Backups are both local and remote.</span>
+Local backups at <code>/opt/coroot/backups/</code> enable fast rollback (under 3 minutes).
+Remote backups on a Hetzner Storage Box provide disaster recovery if the VPS disk fails.
+The sync uses rsync over SSH on port 23, which is the standard SSH port for Hetzner
+Storage Boxes.
+</p>
+</section>
+
+</article>
 </body>
 </html>
