@@ -383,7 +383,36 @@ EdProof is credential-format-agnostic. Any signed document that:
 - Is verifiable offline against a known trust anchor
 - Has a human-readable or machine-readable lifetime assertion
 
-is a valid EdProof credential. Recommended formats:
+is a valid EdProof credential.
+
+**The credential MUST NOT encode policy decisions.**
+
+Principals, capabilities, access rules, permitted usernames, port
+forwarding flags, and validity windows intended as access constraints
+are policy — they belong to Layer 4. A credential that encodes policy
+couples identity to access control and reintroduces the issuer as a
+mandatory participant in every access decision: when policy changes, a
+new credential must be issued, and the issuer is online again.
+
+This is the original sin of SSH certificates. The `valid_principals`,
+`permit-pty`, `permit-port-forwarding`, and similar extension fields
+encode the CA's policy decisions into the credential at issuance time.
+Every policy change requires a CA operation. Revocation degrades to
+waiting for expiry. The CA becomes operationally coupled to every
+crossing.
+
+EdProof credentials carry identity only:
+
+```
+credential answers:  who are you?
+policy answers:      what can you do here, now, today?
+```
+
+These are different questions with different owners and different update
+cadences. The credential is the entity's immutable fact. Policy is the
+verifier's living judgment.
+
+Recommended formats:
 
 **SPIFFE X.509 SVID** — issued by SPIRE after successful attestation.
 Standard X.509 certificate with SPIFFE ID in the SAN. Verifiable
@@ -394,9 +423,13 @@ Widely tooled. Suitable for SSH access, Git signing, and general-purpose
 identity assertion.
 
 ```bash
-ssh-keygen -s ca_key -I "entity-identity" \
-  -n principals -V +3650d identity.pub
+ssh-keygen -s ca_key -I "entity-identity" -V +3650d identity.pub
 ```
+
+The `-n principals` flag MUST NOT be used to encode access policy in
+the certificate. If principals are required by the SSH implementation,
+they SHOULD be set to the entity's stable identifier (e.g. fingerprint),
+not to usernames or role names that encode authorization decisions.
 
 **Custom JSON document** — signed with the CA's Ed25519 key. Suitable
 for lightweight deployments that do not need X.509 or SSH infrastructure.
