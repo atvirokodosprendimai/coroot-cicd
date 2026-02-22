@@ -385,12 +385,15 @@ EdProof is credential-format-agnostic. Any signed document that:
 
 is a valid EdProof credential.
 
-**EdProof credentials carry identity only.**
+**EdProof credentials carry key identity only.**
 
-The credential answers one question: who are you? Everything else —
-what you can do, which systems you may access, which usernames you may
-authenticate as — is out of scope for the credential and out of scope
-for this protocol. Those questions belong to Layer 4.
+The credential answers one question: what key are you presenting? The
+entity may hold multiple keys and present different keys in different
+contexts. The credential binds this interaction to a specific key. It
+makes no claim about the entity's name, role, or nature — those
+concepts are out of scope for the protocol. What the key means, what
+the entity may do with it, and what trust to extend — those questions
+belong to Layer 4.
 
 Recommended formats:
 
