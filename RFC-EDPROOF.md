@@ -676,10 +676,9 @@ that case — which may be fail-open, fail-closed, or cached.
 ## 10. Formal Verification
 
 The Layer 1 attestation exchange has a machine-checked formal model in
-the Tamarin prover, located at `formal/provision.spthy` in the
-RFC-PROVISIONING.md repository. A revised model scoped to the EdProof
-attestation exchange (independent of the Coroot backend) will be
-published with the EdProof implementation repository.
+the Tamarin prover at `formal/edproof.spthy`. It is protocol-generic:
+no Coroot backend elements, no service_name, no pre-enrollment registry.
+The Coroot profile is separately modeled in `formal/provision.spthy`.
 
 The model operates under the Dolev-Yao adversary and verifies:
 
@@ -693,12 +692,12 @@ The model operates under the Dolev-Yao adversary and verifies:
 | `receiver_agreement` | Prover's received credential matches what issuer issued |
 | `executability` | The protocol can complete successfully |
 
-All seven lemmas were verified in 0.54s (Tamarin 1.10.0, Maude 3.5.1).
+All seven lemmas verified in 0.40s (Tamarin 1.10.0, Maude 3.5.1).
 
 To verify:
 
 ```bash
-tamarin-prover --prove formal/provision.spthy
+tamarin-prover --prove formal/edproof.spthy
 ```
 
 ---

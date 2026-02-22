@@ -1,0 +1,335 @@
+/*
+ * Tamarin Model: EdProof Attestation Exchange
+ *
+ * RFC-EDPROOF.md v0.1 — Layered Identity Protocol
+ *
+ * This model verifies the security properties of the EdProof
+ * attestation exchange (Layer 1), defined in RFC-EDPROOF.md §4.
+ *
+ * It is protocol-generic: no Coroot backend elements. No service_name,
+ * no HMAC project derivation, no pre-enrollment key registry.
+ * Compare with formal/provision.spthy which is the Coroot profile.
+ *
+ * Protocol (§4.2 — four messages):
+ *
+ *   1. Prover  -> Issuer:  nonce_request              (unauthenticated)
+ *   2. Issuer  -> Prover:  { nonce }                  (challenge)
+ *   3. Prover  -> Issuer:  { fingerprint, nonce,      (challenge_response)
+ *                             signature, public_key }
+ *   4. Issuer  -> Prover:  senc({ fingerprint,        (credential, TLS)
+ *                                  credential }, tls_key)
+ *
+ *   signature = sign(<nonce, 'edproof'>, sk)
+ *
+ *   The 'edproof' namespace constant in the signature binds the proof
+ *   to this protocol (SSHSIG namespace, §4.2 Message 3).
+ *
+ * TLS model: a fresh symmetric key (~tls_key) is established by the
+ * prover for this session and stored as a state fact TLSKey(pkA, nonce,
+ * ~tls_key). The issuer retrieves it from state. The attacker never
+ * sees ~tls_key on the wire, so cannot decrypt the credential response.
+ *
+ * Adversary model: Dolev-Yao (network attacker — intercept, inject,
+ * replay, modify). TLS is NOT modeled for the challenge exchange;
+ * credential secrecy is proven under the TLS model (Phase 4 only).
+ *
+ * Verified properties (RFC-EDPROOF.md §10):
+ *   - authentication_injective  (injective agreement on nonce)
+ *   - nonce_single_use          (nonce consumed at most once)
+ *   - nonce_freshness           (only issuer-generated nonces accepted)
+ *   - credential_secrecy        (attacker cannot learn the credential)
+ *   - entity_binding            (fingerprint uniquely identifies one key)
+ *   - receiver_agreement        (prover's credential matches issuer's)
+ *   - executability             (protocol can complete — non-vacuity)
+ *
+ * To verify:
+ *   tamarin-prover --prove formal/edproof.spthy
+ *
+ * To explore interactively:
+ *   tamarin-prover interactive formal/edproof.spthy
+ */
+
+theory EdProofAttestation
+begin
+
+builtins: signing, symmetric-encryption
+
+/*
+ * fingerprint: SHA-256 of the Ed25519 public key (§4.1).
+ * Modeled as an uninterpreted function. In the free term algebra,
+ * uninterpreted functions are injective: fingerprint(x) = fingerprint(y)
+ * implies x = y. This underlies the entity_binding lemma.
+ */
+functions: fingerprint/1
+
+/* ============================================================
+ * Key Infrastructure
+ * ============================================================ */
+
+// Every entity generates an Ed25519 key pair.
+// The private key is held by the entity; the public key is public.
+rule Prover_KeyGen:
+    [ Fr(~sk) ]
+  -->
+    [ !ProverKey(~sk, pk(~sk))
+    , Out(pk(~sk))
+    ]
+
+/* ============================================================
+ * Phase 1: Nonce Request (§4.2 Message 1)
+ * ============================================================
+ *
+ * Prover sends an unauthenticated nonce request.
+ * In the HTTP profile (§4.3) this is a POST with no auth header.
+ * Modeled as the constant 'nonce_request' so the attacker can
+ * also trigger nonce generation — reflecting the open endpoint.
+ */
+rule Prover_NonceRequest:
+    [ !ProverKey(~sk, pkA) ]
+  -->
+    [ ProverState1(~sk, pkA)
+    , Out('nonce_request')
+    ]
+
+/* ============================================================
+ * Phase 2: Challenge (§4.2 Message 2)
+ * ============================================================
+ *
+ * Issuer generates a fresh nonce and returns it.
+ * NonceStore is a linear fact: it is consumed exactly once,
+ * structurally enforcing single-use (§4.2 "MUST NOT be reused").
+ */
+rule Issuer_Challenge:
+    [ In('nonce_request')
+    , Fr(~nonce)
+    ]
+  --[ NonceGenerated(~nonce) ]->
+    [ NonceStore(~nonce)
+    , Out(~nonce)
+    ]
+
+/* ============================================================
+ * Phase 3: Challenge Response (§4.2 Message 3)
+ * ============================================================
+ *
+ * Prover signs <nonce, 'edproof'> using its Ed25519 private key.
+ * The 'edproof' constant is the sshsig namespace — it binds the
+ * signature to this protocol and prevents cross-protocol misuse.
+ *
+ * The prover also establishes a fresh TLS session key (~tls_key)
+ * and records it as TLSKey(pkA, nonce, ~tls_key). This models
+ * the TLS session shared with the issuer for Phase 4. ~tls_key
+ * is never placed on the public channel.
+ *
+ * The prover includes its public key pkA in the message so the
+ * issuer can verify the signature without a registry lookup.
+ * (In the HTTP profile, the issuer may look up pkA from its
+ * registry using the fingerprint; the security properties hold
+ * either way because the issuer uses pkA for verify(), not fp.)
+ */
+rule Prover_Respond:
+    [ ProverState1(~sk, pkA)
+    , In(nonce)
+    , Fr(~tls_key)
+    ]
+  --[ ProverSent(pkA, nonce) ]->
+    [ ProverState2(~sk, pkA, nonce, ~tls_key)
+    , Out(<fingerprint(pkA), nonce, sign(<nonce, 'edproof'>, ~sk), pkA>)
+    , TLSKey(pkA, nonce, ~tls_key)
+    ]
+
+/* ============================================================
+ * Phase 4: Verification and Credential Issuance (§4.2 Message 4)
+ * ============================================================
+ *
+ * Critical checks:
+ *   1. NonceStore(nonce) consumed — nonce is now invalid (single-use)
+ *   2. TLSKey(pkA, nonce, tls_key) retrieved from state — the TLS
+ *      session key bound to this (pkA, nonce) pair
+ *   3. verify(sig, <nonce, 'edproof'>, pkA) = true (via restriction)
+ *
+ * On success: a fresh credential (~cred) is issued and returned
+ * encrypted with the TLS session key. The attacker cannot decrypt
+ * because ~tls_key is a state fact never sent on the wire.
+ *
+ * The let-binding enforces that the fingerprint in the received
+ * message equals fingerprint(pkA) for the matched pkA.
+ */
+rule Issuer_Issue:
+    let
+        fp  = fingerprint(pkA)
+        msg = <nonce, 'edproof'>
+    in
+    [ In(<fp, nonce, sig, pkA>)
+    , NonceStore(nonce)
+    , TLSKey(pkA, nonce, tls_key)
+    , Fr(~cred)
+    ]
+  --[ Verify(verify(sig, msg, pkA))
+    , IssuerAccepted(pkA, nonce, ~cred)
+    , NonceUsed(nonce)
+    , SecretCredential(~cred, pkA)
+    , EntityBound(fingerprint(pkA), pkA)
+    ]->
+    [ Out(senc(<fingerprint(pkA), ~cred>, tls_key)) ]
+
+/* ============================================================
+ * Phase 5: Credential Receipt
+ * ============================================================
+ *
+ * Prover decrypts the response using ~tls_key from its session state.
+ * Because ~tls_key is fresh and never public, only the real prover
+ * can perform this decryption — ruling out credential injection.
+ */
+rule Prover_Receive:
+    [ ProverState2(~sk, pkA, nonce, ~tls_key)
+    , In(senc(<fp, cred>, ~tls_key))
+    ]
+  --[ ProverReceived(pkA, nonce, cred)
+    , ProverHasCred(cred)
+    ]->
+    [ ProverProvisioned(pkA, cred) ]
+
+/* ============================================================
+ * Restriction: Signature Verification
+ * ============================================================
+ *
+ * Issuer_Issue may only fire when the signature is valid.
+ * This models the issuer's verify() call: only well-formed
+ * signatures (made with the correct private key) are accepted.
+ */
+restriction SignatureVerification:
+    "All x #i. Verify(x) @ #i ==> x = true"
+
+/* ============================================================
+ * Security Lemmas
+ * ============================================================ */
+
+/*
+ * Lemma 1: Authentication (Injective Agreement)
+ *
+ * If the issuer accepts a challenge response from key pkA with
+ * nonce N, then the holder of pkA actually sent that nonce N,
+ * and the mapping is one-to-one: each acceptance corresponds to
+ * a distinct prover send.
+ *
+ * Rules out:
+ *   - Forgery: attacker cannot create a valid response without sk
+ *   - Replay: each acceptance maps to a unique send (injective)
+ *
+ * Proof sketch: IssuerAccepted requires Verify(verify(sig,msg,pkA))
+ * = true, which requires sig = sign(msg, sk) where pk(sk) = pkA.
+ * Only the prover holds sk, and only Prover_Respond sets ProverSent.
+ * Injectivity follows from NonceStore being linear (consumed once).
+ */
+lemma authentication_injective:
+    "All pkA nonce cred #i.
+        IssuerAccepted(pkA, nonce, cred) @ #i
+    ==>
+        ( Ex #j. ProverSent(pkA, nonce) @ #j
+          & #j < #i
+          & not (Ex cred2 #i2.
+                    IssuerAccepted(pkA, nonce, cred2) @ #i2
+                    & not (#i2 = #i))
+        )
+    "
+
+/*
+ * Lemma 2: Nonce Single Use
+ *
+ * A nonce is consumed at most once. If the issuer accepts two
+ * requests with the same nonce, they are the same event.
+ *
+ * Enforced structurally: NonceStore(nonce) is a linear fact,
+ * consumed in Issuer_Issue. Tamarin's multiset rewriting semantics
+ * guarantee a linear fact can be consumed at most once.
+ */
+lemma nonce_single_use:
+    "All nonce #i #j.
+        NonceUsed(nonce) @ #i & NonceUsed(nonce) @ #j
+    ==> #i = #j
+    "
+
+/*
+ * Lemma 3: Nonce Freshness
+ *
+ * Every nonce consumed in Issuer_Issue was previously generated
+ * by the issuer. The attacker cannot inject arbitrary nonces.
+ *
+ * Follows from NonceStore being created only in Issuer_Challenge,
+ * which sets NonceGenerated(~nonce), and ~nonce is a fresh value.
+ */
+lemma nonce_freshness:
+    "All nonce #i.
+        NonceUsed(nonce) @ #i
+    ==> Ex #j. NonceGenerated(nonce) @ #j & #j < #i
+    "
+
+/*
+ * Lemma 4: Credential Secrecy
+ *
+ * The attacker cannot learn a credential issued by the protocol.
+ *
+ * Holds under the TLS model: the credential is output as
+ * senc(<fp, ~cred>, tls_key) where tls_key = ~tls_key is a fresh
+ * value that never appears on the public channel. Without tls_key
+ * the attacker cannot decrypt.
+ */
+lemma credential_secrecy:
+    "All cred pkA #i.
+        SecretCredential(cred, pkA) @ #i
+    ==> not (Ex #j. K(cred) @ #j)
+    "
+
+/*
+ * Lemma 5: Entity Binding
+ *
+ * A fingerprint is bound to exactly one public key. If two issuer
+ * acceptances record the same fingerprint fp but different keys
+ * pkA and pkB, then pkA = pkB.
+ *
+ * Follows from the injectivity of the fingerprint function in the
+ * free term algebra: fingerprint(x) = fingerprint(y) implies x = y.
+ * This models SHA-256 collision resistance.
+ */
+lemma entity_binding:
+    "All fp pkA #i.
+        EntityBound(fp, pkA) @ #i
+    ==> ( All pkB #j.
+            EntityBound(fp, pkB) @ #j
+          ==> pkA = pkB
+        )
+    "
+
+/*
+ * Lemma 6: Receiver Agreement
+ *
+ * If a prover believes it received credential C for nonce N, then
+ * the issuer did in fact issue C for that (pkA, N) pair earlier.
+ *
+ * Rules out an attacker injecting a fake credential response.
+ * Holds because the credential arrives as senc(..., ~tls_key),
+ * and ~tls_key is only known to the prover and the issuer that
+ * processed TLSKey(pkA, nonce, ~tls_key).
+ */
+lemma receiver_agreement:
+    "All pkA nonce cred #i.
+        ProverReceived(pkA, nonce, cred) @ #i
+    ==> Ex #j. IssuerAccepted(pkA, nonce, cred) @ #j
+        & #j < #i
+    "
+
+/*
+ * Lemma 7: Executability (Non-Vacuity Check)
+ *
+ * The protocol can complete successfully. This confirms that the
+ * security lemmas above are not vacuously true due to an
+ * impossible protocol execution.
+ */
+lemma executability:
+    exists-trace
+    "Ex pkA nonce cred #i.
+        ProverReceived(pkA, nonce, cred) @ #i
+    "
+
+end
