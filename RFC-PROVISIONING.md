@@ -1,11 +1,12 @@
 # Autonomous Agent Provisioning Protocol for Observability Tenants
 
 ```
-Status:       Draft
+Status:       Superseded
 Version:      0.3
 Authors:      oldroot
 Date:         2026-02-21
 Instance:     table.beerpub.dev
+Superseded-By: https://github.com/atvirokodosprendimai/edproof
 ```
 
 ## Abstract
