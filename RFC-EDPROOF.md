@@ -412,6 +412,19 @@ These are different questions with different owners and different update
 cadences. The credential is the entity's immutable fact. Policy is the
 verifier's living judgment.
 
+**EdProof implementations MUST ignore policy fields present in a
+credential.**
+
+If a credential arrives containing fields that encode policy decisions
+— SSH certificate `valid_principals`, permission extensions, or
+equivalent fields in other formats — the EdProof implementation MUST
+NOT honor those fields as access control decisions. They are treated
+as opaque metadata. The verifier's Layer 4 policy engine is the sole
+authority on access. A credential that happens to carry policy fields
+(e.g., an SSH certificate issued by a non-EdProof CA) remains a valid
+EdProof credential for identity purposes; its policy fields are
+invisible to the protocol.
+
 Recommended formats:
 
 **SPIFFE X.509 SVID** — issued by SPIRE after successful attestation.
