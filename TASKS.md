@@ -5,3 +5,4 @@ need to launch coroot server on hz vps, using domain: table.beerpub.dev
 - [x] Add external uptime monitoring (`.github/workflows/uptime-monitor.yml` — GHA cron every 5 min, auto-creates/closes issues)
 - [x] Document Docker `expose:` vs `ports:` implications in DEPLOY.md
 - [x] Order Hetzner Storage Box and configure SSH key + `/etc/coroot-backup.conf` on VPS (see DEPLOY.md for setup instructions)
+- [ ] Split repos — move RFC-EDPROOF.md and formal/edproof.spthy to a new generic `edproof` repo; keep coroot-cicd for Coroot-specific files (RFC-PROVISIONING.md, formal/provision.spthy, docker configs, scripts)
