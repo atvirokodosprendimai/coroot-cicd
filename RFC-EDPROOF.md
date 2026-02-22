@@ -385,45 +385,12 @@ EdProof is credential-format-agnostic. Any signed document that:
 
 is a valid EdProof credential.
 
-**The credential MUST NOT encode policy decisions.**
+**EdProof credentials carry identity only.**
 
-Principals, capabilities, access rules, permitted usernames, port
-forwarding flags, and validity windows intended as access constraints
-are policy — they belong to Layer 4. A credential that encodes policy
-couples identity to access control and reintroduces the issuer as a
-mandatory participant in every access decision: when policy changes, a
-new credential must be issued, and the issuer is online again.
-
-This is the original sin of SSH certificates. The `valid_principals`,
-`permit-pty`, `permit-port-forwarding`, and similar extension fields
-encode the CA's policy decisions into the credential at issuance time.
-Every policy change requires a CA operation. Revocation degrades to
-waiting for expiry. The CA becomes operationally coupled to every
-crossing.
-
-EdProof credentials carry identity only:
-
-```
-credential answers:  who are you?
-policy answers:      what can you do here, now, today?
-```
-
-These are different questions with different owners and different update
-cadences. The credential is the entity's immutable fact. Policy is the
-verifier's living judgment.
-
-**EdProof implementations MUST ignore policy fields present in a
-credential.**
-
-If a credential arrives containing fields that encode policy decisions
-— SSH certificate `valid_principals`, permission extensions, or
-equivalent fields in other formats — the EdProof implementation MUST
-NOT honor those fields as access control decisions. They are treated
-as opaque metadata. The verifier's Layer 4 policy engine is the sole
-authority on access. A credential that happens to carry policy fields
-(e.g., an SSH certificate issued by a non-EdProof CA) remains a valid
-EdProof credential for identity purposes; its policy fields are
-invisible to the protocol.
+The credential answers one question: who are you? Everything else —
+what you can do, which systems you may access, which usernames you may
+authenticate as — is out of scope for the credential and out of scope
+for this protocol. Those questions belong to Layer 4.
 
 Recommended formats:
 
@@ -438,11 +405,6 @@ identity assertion.
 ```bash
 ssh-keygen -s ca_key -I "entity-identity" -V +3650d identity.pub
 ```
-
-The `-n principals` flag MUST NOT be used to encode access policy in
-the certificate. If principals are required by the SSH implementation,
-they SHOULD be set to the entity's stable identifier (e.g. fingerprint),
-not to usernames or role names that encode authorization decisions.
 
 **Custom JSON document** — signed with the CA's Ed25519 key. Suitable
 for lightweight deployments that do not need X.509 or SSH infrastructure.
