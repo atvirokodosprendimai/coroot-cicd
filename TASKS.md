@@ -6,3 +6,4 @@ need to launch coroot server on hz vps, using domain: table.beerpub.dev
 - [x] Document Docker `expose:` vs `ports:` implications in DEPLOY.md
 - [x] Order Hetzner Storage Box and configure SSH key + `/etc/coroot-backup.conf` on VPS (see DEPLOY.md for setup instructions)
 - [x] Split repos — RFC-EDPROOF.md and formal/edproof.spthy moved to https://github.com/atvirokodosprendimai/edproof
+- [x] Fetch prices from Hetzner console and push them to Coroot

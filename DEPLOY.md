@@ -142,6 +142,9 @@ Schedule (Monday 04:00 UTC) or Manual Trigger
 |--------|-------|
 | `VPS_SSH_KEY` | Private key contents (`~/.ssh/coroot-table`) |
 | `VPS_HOST` | `91.99.74.36` |
+| `HETZNER_TOKEN` | Hetzner Cloud API token — used by `hetzner-prices.yml` to fetch pricing |
+| `COROOT_EMAIL` | Coroot admin email — used by `hetzner-prices.yml` to authenticate |
+| `COROOT_PASSWORD` | Coroot admin password — used by `hetzner-prices.yml` to authenticate |
 
 ### Manual Trigger Options
 
@@ -314,6 +317,51 @@ To manually trigger a check:
 
 ```bash
 gh workflow run uptime-monitor.yml
+```
+
+## Hetzner Price Metrics
+
+`scripts/push-hz-prices.py` fetches active server pricing from the Hetzner
+Cloud API, derives blended per-CPU-core and per-memory-GB hourly rates, and
+posts them to Coroot's custom cloud pricing endpoint. Costs then appear in
+Coroot's native cost dashboards. No VPS changes required.
+
+### One-time setup
+
+**Add the three required GitHub Actions secrets:**
+
+```bash
+gh secret set HETZNER_TOKEN  --body "<hetzner-cloud-api-token>"
+gh secret set COROOT_EMAIL   --body "<coroot-admin-email>"
+gh secret set COROOT_PASSWORD --body "<coroot-admin-password>"
+```
+
+The script auto-discovers the Coroot project name via the API after login. To
+override, set a repo variable:
+
+```bash
+gh variable set COROOT_PROJECT --body "<project-name>"
+```
+
+### How rates are derived
+
+Hetzner sells CPU and memory as a bundle. The script splits the total hourly
+server cost into per-CPU-core and per-memory-GB rates using the same 8.8:1
+CPU:memory ratio as Coroot's GCP baseline pricing, scaled so that
+`per_cpu × vCPUs + per_memory × RAM_GB = total_hourly_cost` exactly.
+
+If multiple servers are running, all are aggregated into a single blended rate.
+
+### Manual trigger
+
+```bash
+gh workflow run hetzner-prices.yml
+```
+
+Or run locally:
+
+```bash
+HETZNER_TOKEN=... COROOT_PROJECT=<project> python3 scripts/push-hz-prices.py
 ```
 
 ## DNS
