@@ -1,0 +1,38 @@
+name: Hetzner Price Push
+
+# Derives per-CPU and per-memory hourly rates from active Hetzner server
+# pricing and updates Coroot's custom cloud pricing via its project API.
+# Runs directly on the GHA runner — no SSH to VPS required.
+#
+# Required secrets: HETZNER_TOKEN, COROOT_EMAIL, COROOT_PASSWORD
+# Optional vars:    COROOT_PROJECT (auto-discovered from API if unset)
+
+on:
+  schedule:
+    # Daily at 06:00 UTC
+    - cron: "0 6 * * *"
+
+  workflow_dispatch:
+
+jobs:
+  push-prices:
+    name: Push Hetzner Prices to Coroot
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Derive and push pricing
+        env:
+          HETZNER_TOKEN: ${{ secrets.HETZNER_TOKEN }}
+          COROOT_EMAIL: ${{ secrets.COROOT_EMAIL }}
+          COROOT_PASSWORD: ${{ secrets.COROOT_PASSWORD }}
+          COROOT_URL: https://table.beerpub.dev
+          COROOT_PROJECT: ${{ vars.COROOT_PROJECT }}
+        run: python3 scripts/push-hz-prices.py
+
+      - name: Summary
+        if: success()
+        run: |
+          echo "### Hetzner Prices Updated" >> $GITHUB_STEP_SUMMARY
+          echo "Custom cloud pricing updated in Coroot (project auto-discovered or from \`COROOT_PROJECT\` var)." >> $GITHUB_STEP_SUMMARY
