@@ -1,0 +1,93 @@
+name: VPS Diagnostics
+
+on:
+  workflow_dispatch:
+
+env:
+  VPS_HOST: ${{ secrets.VPS_HOST }}
+  SSH_KEY_PATH: /tmp/vps_ssh_key
+
+jobs:
+  diagnose:
+    name: Run VPS Diagnostics
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup SSH
+        run: |
+          echo "${{ secrets.VPS_SSH_KEY }}" > ${{ env.SSH_KEY_PATH }}
+          chmod 600 ${{ env.SSH_KEY_PATH }}
+          mkdir -p ~/.ssh
+          ssh-keyscan -H ${{ env.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Diagnose VPS
+        run: |
+          ssh -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no -o ConnectTimeout=30 \
+            root@${{ env.VPS_HOST }} 'bash -s' <<'DIAG'
+          set +e
+          echo "=== SYSTEM INFO ==="
+          uname -a
+          uptime
+          echo ""
+
+          echo "=== MEMORY ==="
+          free -h
+          echo ""
+
+          echo "=== DISK ==="
+          df -h
+          echo ""
+
+          echo "=== OOM KILLER HISTORY ==="
+          dmesg 2>/dev/null | grep -i "oom\|out of memory\|killed process" | tail -30 || journalctl -k --no-pager 2>/dev/null | grep -i "oom\|out of memory\|killed process" | tail -30 || echo "no oom entries found"
+          echo ""
+
+          echo "=== DOCKER STATS ==="
+          docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}\t{{.NetIO}}\t{{.BlockIO}}" 2>/dev/null || echo "docker stats failed"
+          echo ""
+
+          echo "=== DOCKER PS ==="
+          docker ps -a --format "table {{.Names}}\t{{.Status}}\t{{.Image}}" 2>/dev/null || echo "docker ps failed"
+          echo ""
+
+          echo "=== DOCKER DISK USAGE ==="
+          docker system df -v 2>/dev/null || echo "docker system df failed"
+          echo ""
+
+          echo "=== PRODUCTION DOCKER-COMPOSE.YML ==="
+          cat /opt/coroot/docker-compose.yml 2>/dev/null || echo "file not found"
+          echo ""
+
+          echo "=== PRODUCTION CADDYFILE ==="
+          cat /opt/coroot/Caddyfile 2>/dev/null || echo "file not found"
+          echo ""
+
+          echo "=== RECENT COROOT LOGS ==="
+          docker compose -p coroot -f /opt/coroot/docker-compose.yml logs --tail 50 coroot 2>/dev/null || echo "no logs"
+          echo ""
+
+          echo "=== RECENT CLICKHOUSE LOGS ==="
+          docker compose -p coroot -f /opt/coroot/docker-compose.yml logs --tail 50 clickhouse 2>/dev/null || echo "no logs"
+          echo ""
+
+          echo "=== RECENT PROMETHEUS LOGS ==="
+          docker compose -p coroot -f /opt/coroot/docker-compose.yml logs --tail 50 prometheus 2>/dev/null || echo "no logs"
+          echo ""
+
+          echo "=== RECENT CADDY LOGS ==="
+          docker compose -p coroot -f /opt/coroot/docker-compose.yml logs --tail 30 caddy 2>/dev/null || echo "no logs"
+          echo ""
+
+          echo "=== DOCKER EVENTS (LAST 24H) ==="
+          docker events --since 24h --until 0s --format '{{.Time}} {{.Type}} {{.Action}} {{.Actor.Attributes.name}}' 2>/dev/null | tail -50 || echo "docker events failed"
+          echo ""
+
+          echo "=== SWAP ==="
+          swapon --show 2>/dev/null || echo "no swap"
+          echo ""
+
+          echo "=== TOP MEMORY CONSUMERS ==="
+          ps aux --sort=-%mem | head -15
+          echo ""
+
+          echo "=== DIAGNOSTICS COMPLETE ==="
+          DIAG

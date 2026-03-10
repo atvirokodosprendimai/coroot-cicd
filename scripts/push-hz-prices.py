@@ -22,6 +22,7 @@ import http.cookiejar
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -45,13 +46,35 @@ CPU_MEMORY_RATIO = 0.03465 / 0.003938
 
 # --- Helpers ---
 
+MAX_RETRIES = 3
+RETRY_DELAYS = (5, 15, 30)
+
+
+def _retry(fn, description: str):
+    """Call *fn* with retries on transient network errors (timeout, connection)."""
+    for attempt in range(MAX_RETRIES):
+        try:
+            return fn()
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            if isinstance(exc, urllib.error.HTTPError):
+                raise  # HTTP errors are not transient — propagate immediately
+            if attempt == MAX_RETRIES - 1:
+                raise
+            delay = RETRY_DELAYS[attempt]
+            print(f"  Retry {attempt + 1}/{MAX_RETRIES} for {description} "
+                  f"in {delay}s ({exc})")
+            time.sleep(delay)
+
+
 def hetzner_get(path: str) -> dict:
-    req = urllib.request.Request(
-        f"https://api.hetzner.cloud{path}",
-        headers={"Authorization": f"Bearer {HETZNER_TOKEN}"},
-    )
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        return json.loads(resp.read())
+    def _do():
+        req = urllib.request.Request(
+            f"https://api.hetzner.cloud{path}",
+            headers={"Authorization": f"Bearer {HETZNER_TOKEN}"},
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read())
+    return _retry(_do, f"GET {path}")
 
 
 # Coroot session — cookie jar persists the auth cookie across requests
@@ -60,21 +83,23 @@ _opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(_jar))
 
 
 def coroot_request(method: str, path: str, body: dict | None = None) -> dict | None:
-    data = json.dumps(body).encode() if body is not None else None
-    headers = {"Content-Type": "application/json"} if data else {}
-    req = urllib.request.Request(
-        f"{COROOT_URL}{path}",
-        data=data,
-        method=method,
-        headers=headers,
-    )
-    try:
-        with _opener.open(req, timeout=15) as resp:
-            raw = resp.read()
-            return json.loads(raw) if raw.strip() else None
-    except urllib.error.HTTPError as e:
-        body_text = e.read().decode(errors="replace").strip()
-        raise RuntimeError(f"HTTP {e.code} {method} {path}: {body_text}") from e
+    def _do():
+        data = json.dumps(body).encode() if body is not None else None
+        headers = {"Content-Type": "application/json"} if data else {}
+        req = urllib.request.Request(
+            f"{COROOT_URL}{path}",
+            data=data,
+            method=method,
+            headers=headers,
+        )
+        try:
+            with _opener.open(req, timeout=30) as resp:
+                raw = resp.read()
+                return json.loads(raw) if raw.strip() else None
+        except urllib.error.HTTPError as e:
+            body_text = e.read().decode(errors="replace").strip()
+            raise RuntimeError(f"HTTP {e.code} {method} {path}: {body_text}") from e
+    return _retry(_do, f"{method} {path}")
 
 
 # --- 1. Fetch Hetzner pricing ---
