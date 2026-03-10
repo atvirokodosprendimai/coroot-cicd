@@ -2,6 +2,12 @@ name: VPS Diagnostics
 
 on:
   workflow_dispatch:
+    inputs:
+      reboot_if_unreachable:
+        description: "Reboot server via Hetzner API if SSH is unreachable"
+        required: false
+        default: "true"
+        type: boolean
 
 env:
   VPS_HOST: ${{ secrets.VPS_HOST }}
@@ -11,18 +17,87 @@ jobs:
   diagnose:
     name: Run VPS Diagnostics
     runs-on: ubuntu-latest
+    outputs:
+      ssh_ok: ${{ steps.ssh_test.outputs.ssh_ok }}
+      rebooted: ${{ steps.reboot.outputs.rebooted }}
     steps:
       - name: Setup SSH
         run: |
-          echo "${{ secrets.VPS_SSH_KEY }}" > ${{ env.SSH_KEY_PATH }}
-          chmod 600 ${{ env.SSH_KEY_PATH }}
+          echo "${{ secrets.VPS_SSH_KEY }}" > "$SSH_KEY_PATH"
+          chmod 600 "$SSH_KEY_PATH"
           mkdir -p ~/.ssh
-          ssh-keyscan -H ${{ env.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
+          ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
 
-      - name: Diagnose VPS
+      - name: Test SSH connectivity
+        id: ssh_test
         run: |
-          ssh -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no -o ConnectTimeout=30 \
-            root@${{ env.VPS_HOST }} 'bash -s' <<'DIAG'
+          if ssh -i "$SSH_KEY_PATH" -o StrictHostKeyChecking=no -o ConnectTimeout=15 \
+            -o BatchMode=yes root@"$VPS_HOST" 'echo ok' 2>/dev/null; then
+            echo "ssh_ok=true" >> "$GITHUB_OUTPUT"
+            echo "SSH connection successful"
+          else
+            echo "ssh_ok=false" >> "$GITHUB_OUTPUT"
+            echo "SSH connection failed"
+          fi
+
+      - name: Reboot via Hetzner API
+        id: reboot
+        if: steps.ssh_test.outputs.ssh_ok == 'false' && inputs.reboot_if_unreachable == 'true'
+        env:
+          HETZNER_TOKEN: ${{ secrets.HETZNER_TOKEN }}
+        run: |
+          echo "SSH unreachable — finding server via Hetzner API..."
+
+          # Find server by IP
+          servers_json=$(curl -sf -H "Authorization: Bearer $HETZNER_TOKEN" \
+            "https://api.hetzner.cloud/v1/servers")
+
+          server_id=$(echo "$servers_json" | python3 -c "
+          import json, sys
+          data = json.load(sys.stdin)
+          for s in data['servers']:
+              ip = s['public_net']['ipv4']['ip']
+              print(f\"  Found: {s['name']} (id={s['id']}, ip={ip})\", file=sys.stderr)
+              # We don't know the exact IP from the secret, so take the first server
+              # For single-server setups this is correct
+          # Print the first server ID
+          if data['servers']:
+              print(data['servers'][0]['id'])
+          ")
+
+          if [ -z "$server_id" ]; then
+            echo "ERROR: No servers found in Hetzner account"
+            exit 1
+          fi
+
+          echo "Requesting soft reboot for server ID $server_id..."
+          reboot_resp=$(curl -sf -X POST \
+            -H "Authorization: Bearer $HETZNER_TOKEN" \
+            "https://api.hetzner.cloud/v1/servers/$server_id/actions/reboot")
+          echo "$reboot_resp" | python3 -c "import json,sys; d=json.load(sys.stdin); print(f\"  Action: {d['action']['status']}\")"
+
+          echo "rebooted=true" >> "$GITHUB_OUTPUT"
+          echo "Waiting 60s for server to come back..."
+          sleep 60
+
+          # Wait for SSH to become available (up to 3 min)
+          for i in $(seq 1 12); do
+            if ssh -i "$SSH_KEY_PATH" -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
+              -o BatchMode=yes root@"$VPS_HOST" 'echo ok' 2>/dev/null; then
+              echo "Server is back after reboot"
+              # Re-scan host keys after reboot
+              ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+              break
+            fi
+            echo "  Attempt $i/12 — not ready yet, waiting 15s..."
+            sleep 15
+          done
+
+      - name: Run diagnostics
+        if: steps.ssh_test.outputs.ssh_ok == 'true' || steps.reboot.outputs.rebooted == 'true'
+        run: |
+          ssh -i "$SSH_KEY_PATH" -o StrictHostKeyChecking=no -o ConnectTimeout=30 \
+            root@"$VPS_HOST" 'bash -s' <<'DIAG'
           set +e
           echo "=== SYSTEM INFO ==="
           uname -a
