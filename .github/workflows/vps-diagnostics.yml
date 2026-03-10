@@ -70,11 +70,18 @@ jobs:
             exit 1
           fi
 
-          echo "Requesting soft reboot for server ID $server_id..."
-          reboot_resp=$(curl -sf -X POST \
+          echo "Requesting hard reset for server ID $server_id..."
+          reboot_resp=$(curl -s -w "\nHTTP_CODE:%{http_code}" -X POST \
             -H "Authorization: Bearer $HETZNER_TOKEN" \
-            "https://api.hetzner.cloud/v1/servers/$server_id/actions/reboot")
-          echo "$reboot_resp" | python3 -c "import json,sys; d=json.load(sys.stdin); print(f\"  Action: {d['action']['status']}\")"
+            "https://api.hetzner.cloud/v1/servers/$server_id/actions/reset")
+          http_code=$(echo "$reboot_resp" | grep "HTTP_CODE:" | cut -d: -f2)
+          body=$(echo "$reboot_resp" | grep -v "HTTP_CODE:")
+          echo "  HTTP $http_code"
+          echo "$body" | python3 -c "import json,sys; d=json.load(sys.stdin); print(f\"  Action: {d.get('action',{}).get('status','unknown')}\")" 2>/dev/null || echo "  Response: $body"
+          if [ "$http_code" -ge 400 ] 2>/dev/null; then
+            echo "ERROR: Hetzner API returned $http_code"
+            exit 1
+          fi
 
           echo "rebooted=true" >> "$GITHUB_OUTPUT"
           echo "Waiting 60s for server to come back..."
