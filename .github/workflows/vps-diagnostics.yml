@@ -42,7 +42,7 @@ jobs:
 
       - name: Reboot via Hetzner API
         id: reboot
-        if: steps.ssh_test.outputs.ssh_ok == 'false' && inputs.reboot_if_unreachable == 'true'
+        if: steps.ssh_test.outputs.ssh_ok == 'false' && inputs.reboot_if_unreachable
         env:
           HETZNER_TOKEN: ${{ secrets.HETZNER_TOKEN }}
         run: |
