@@ -53,9 +53,20 @@ MAX_DELAY = 60       # seconds — cap for exponential backoff
 CONNECT_TIMEOUT = 10  # seconds (fail fast on unreachable host)
 READ_TIMEOUT = 30     # seconds
 
+# HTTP status codes worth retrying (server temporarily unavailable)
+RETRYABLE_HTTP_CODES = {429, 500, 502, 503, 504}
+
+
+def _is_retryable(exc):
+    """Return True if *exc* is a transient error worth retrying."""
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code in RETRYABLE_HTTP_CODES
+    # Network-level errors (timeout, connection refused, SSL) are always transient
+    return isinstance(exc, (urllib.error.URLError, TimeoutError, OSError))
+
 
 def _retry(fn, description: str):
-    """Call *fn* with retries on transient network errors (timeout, connection).
+    """Call *fn* with retries on transient errors (network + HTTP 429/5xx).
 
     Uses exponential backoff with ±30% jitter: ~5s, ~10s, ~20s, ~40s.
     """
@@ -63,8 +74,8 @@ def _retry(fn, description: str):
         try:
             return fn()
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            if isinstance(exc, urllib.error.HTTPError):
-                raise  # HTTP errors are not transient — propagate immediately
+            if not _is_retryable(exc):
+                raise
             if attempt == MAX_RETRIES - 1:
                 raise
             delay = min(BASE_DELAY * (2 ** attempt), MAX_DELAY)
@@ -107,6 +118,8 @@ def coroot_request(method: str, path: str, body: dict | None = None) -> dict | N
                 return json.loads(raw) if raw.strip() else None
         except urllib.error.HTTPError as e:
             body_text = e.read().decode(errors="replace").strip()
+            if e.code in RETRYABLE_HTTP_CODES:
+                raise  # let _retry handle 429/5xx
             raise RuntimeError(f"HTTP {e.code} {method} {path}: {body_text}") from e
     return _retry(_do, f"{method} {path}")
 
