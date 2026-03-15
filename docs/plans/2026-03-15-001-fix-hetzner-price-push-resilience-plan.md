@@ -22,8 +22,8 @@ The VPS was upgraded and retention limits added, but transient unreachability ca
 | Aspect | Detail |
 |--------|--------|
 | **What fails** | SSL handshake timeout to `https://table.beerpub.dev` from GitHub Actions runner |
-| **Where** | `scripts/push-hz-prices.py:175` → `coroot_request("POST", "/api/login", ...)` |
-| **Current mitigation** | 3 retries with 5/15/30s delays (`push-hz-prices.py:49-66`) |
+| **Where** | `scripts/push-hz-prices.py` → `coroot_request("POST", "/api/login", ...)` |
+| **Current mitigation** | 3 retries with 5/15/30s delays (see `_retry()` in `push-hz-prices.py`) |
 | **Failure rate** | ~20% (1/5 runs since workflow was created on March 10) |
 | **Impact** | Red workflow badge, noisy notifications, wasted attention — but **zero business impact** since prices change rarely |
 | **Root cause class** | VPS temporarily unreachable (resource pressure, network blip, container restart cycle) |
@@ -64,10 +64,10 @@ Current: 3 retries, fixed 5/15/30s delays (total ~50s window).
 Problem: SSL handshake can take 30s to timeout × 3 retries = 90s+ before first retry even starts.
 
 Improvements:
-- Reduce SSL connect timeout from 30s to 10s (fail faster)
+- Reduce Coroot socket timeout from 30s to 15s (fail faster on unreachable VPS)
 - Increase retries from 3 to 5
-- Use exponential backoff with jitter: 5s, 10s, 20s, 40s, 60s (total ~135s retry window)
-- Separate connect timeout from read timeout
+- Use exponential backoff with jitter: ~5s, ~10s, ~20s, ~40s (4 retry sleeps, total ~75s retry window)
+- Retry HTTP 429/5xx responses (previously treated as permanent failures)
 
 ## Technical Approach
 
@@ -131,35 +131,10 @@ jobs:
 
 ### Python script changes (`push-hz-prices.py`)
 
-1. **Reduce connect timeout:** Change `timeout=30` to separate connect/read timeouts
+1. **Reduce Coroot timeout:** `timeout=15` (was 30) — `urllib`'s timeout is a single per-socket-operation value covering both connect and read; no true connect/read separation in stdlib
 2. **Add jitter:** Randomise retry delays ±30% to avoid thundering herd
-3. **Increase retry budget:** 5 retries with exponential backoff (5, 10, 20, 40, 60s)
-
-```python
-import random
-
-MAX_RETRIES = 5
-BASE_DELAY = 5  # seconds
-MAX_DELAY = 60  # seconds
-CONNECT_TIMEOUT = 10  # seconds (was 30)
-READ_TIMEOUT = 30  # seconds
-
-def _retry(fn, description: str):
-    for attempt in range(MAX_RETRIES):
-        try:
-            return fn()
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            if isinstance(exc, urllib.error.HTTPError):
-                raise
-            if attempt == MAX_RETRIES - 1:
-                raise
-            delay = min(BASE_DELAY * (2 ** attempt), MAX_DELAY)
-            jitter = delay * random.uniform(-0.3, 0.3)
-            actual_delay = max(1, delay + jitter)
-            print(f"  Retry {attempt + 1}/{MAX_RETRIES} for {description} "
-                  f"in {actual_delay:.0f}s ({exc})")
-            time.sleep(actual_delay)
-```
+3. **Increase retry budget:** 5 attempts with exponential backoff (~5s, ~10s, ~20s, ~40s — 4 sleeps between 5 attempts)
+4. **Retry HTTP 429/5xx:** Retryable status codes (429, 500, 502, 503, 504) are now retried; only 4xx client errors (except 429) are permanent
 
 ## Edge Cases Considered
 
@@ -185,7 +160,8 @@ def _retry(fn, description: str):
 - [ ] Successful runs still show "Hetzner Prices Updated" in summary
 - [ ] Failed runs after health check passes show warning (not error) in summary
 - [ ] Python retry uses exponential backoff with jitter
-- [ ] Connect timeout reduced to 10s for faster failure detection
+- [ ] Coroot socket timeout reduced to 15s for faster failure detection
+- [ ] HTTP 429/5xx responses retried instead of treated as permanent failures
 - [ ] Workflow stays green when VPS has a transient blip
 
 ## MVP
@@ -196,12 +172,12 @@ Full workflow replacement with health check, continue-on-error, and summary step
 
 ### scripts/push-hz-prices.py
 
-Updated retry logic with exponential backoff, jitter, and separate connect/read timeouts (see Technical Approach above).
+Updated retry logic with exponential backoff, jitter, reduced socket timeout, and retryable HTTP codes (see Technical Approach above).
 
 ## Sources
 
 - **Failing run:** https://github.com/atvirokodosprendimai/coroot-cicd/actions/runs/23105216116
 - **Prior incident:** [session - 2603102158 - fix failing action and prometheus oom rca](../../memory/session%20-%202603102158%20-%20fix%20failing%20action%20and%20prometheus%20oom%20rca.md)
-- **Current retry logic:** `scripts/push-hz-prices.py:49-66`
+- **Current retry logic:** `scripts/push-hz-prices.py` (see `_retry()` and `RETRYABLE_HTTP_CODES`)
 - **Current workflow:** `.github/workflows/hetzner-prices.yml`
 - **VPS diagnostics:** `.github/workflows/vps-diagnostics.yml` (manual trigger for deeper issues)

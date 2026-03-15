@@ -50,8 +50,13 @@ CPU_MEMORY_RATIO = 0.03465 / 0.003938
 MAX_RETRIES = 5
 BASE_DELAY = 5       # seconds — first retry after ~5s
 MAX_DELAY = 60       # seconds — cap for exponential backoff
-CONNECT_TIMEOUT = 10  # seconds (fail fast on unreachable host)
-READ_TIMEOUT = 30     # seconds
+
+# urllib timeout= is a per-socket-operation timeout (covers both connect and read).
+# Coroot is on a small VPS that may be slow to respond — use a shorter timeout to
+# fail fast and let the retry loop handle recovery. Hetzner API is reliable but may
+# return larger payloads, so it gets a longer timeout.
+HETZNER_TIMEOUT = 30  # seconds — reliable API, larger responses
+COROOT_TIMEOUT = 15   # seconds — small VPS, fail fast on unreachable
 
 # HTTP status codes worth retrying (server temporarily unavailable)
 RETRYABLE_HTTP_CODES = {429, 500, 502, 503, 504}
@@ -92,7 +97,7 @@ def hetzner_get(path: str) -> dict:
             f"https://api.hetzner.cloud{path}",
             headers={"Authorization": f"Bearer {HETZNER_TOKEN}"},
         )
-        with urllib.request.urlopen(req, timeout=READ_TIMEOUT) as resp:
+        with urllib.request.urlopen(req, timeout=HETZNER_TIMEOUT) as resp:
             return json.loads(resp.read())
     return _retry(_do, f"GET {path}")
 
@@ -113,7 +118,7 @@ def coroot_request(method: str, path: str, body: dict | None = None) -> dict | N
             headers=headers,
         )
         try:
-            with _opener.open(req, timeout=CONNECT_TIMEOUT) as resp:
+            with _opener.open(req, timeout=COROOT_TIMEOUT) as resp:
                 raw = resp.read()
                 return json.loads(raw) if raw.strip() else None
         except urllib.error.HTTPError as e:
