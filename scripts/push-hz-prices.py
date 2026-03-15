@@ -21,6 +21,7 @@ Optional env:
 import http.cookiejar
 import json
 import os
+import random
 import sys
 import time
 import urllib.error
@@ -46,24 +47,48 @@ CPU_MEMORY_RATIO = 0.03465 / 0.003938
 
 # --- Helpers ---
 
-MAX_RETRIES = 3
-RETRY_DELAYS = (5, 15, 30)
+MAX_RETRIES = 5
+BASE_DELAY = 5       # seconds — first retry after ~5s
+MAX_DELAY = 60       # seconds — cap for exponential backoff
+
+# urllib timeout= is a per-socket-operation timeout (covers both connect and read).
+# Coroot is on a small VPS that may be slow to respond — use a shorter timeout to
+# fail fast and let the retry loop handle recovery. Hetzner API is reliable but may
+# return larger payloads, so it gets a longer timeout.
+HETZNER_TIMEOUT = 30  # seconds — reliable API, larger responses
+COROOT_TIMEOUT = 15   # seconds — small VPS, fail fast on unreachable
+
+# HTTP status codes worth retrying (server temporarily unavailable)
+RETRYABLE_HTTP_CODES = {429, 500, 502, 503, 504}
+
+
+def _is_retryable(exc):
+    """Return True if *exc* is a transient error worth retrying."""
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code in RETRYABLE_HTTP_CODES
+    # Network-level errors (timeout, connection refused, SSL) are always transient
+    return isinstance(exc, (urllib.error.URLError, TimeoutError, OSError))
 
 
 def _retry(fn, description: str):
-    """Call *fn* with retries on transient network errors (timeout, connection)."""
+    """Call *fn* with retries on transient errors (network + HTTP 429/5xx).
+
+    Uses exponential backoff with ±30% jitter: ~5s, ~10s, ~20s, ~40s.
+    """
     for attempt in range(MAX_RETRIES):
         try:
             return fn()
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            if isinstance(exc, urllib.error.HTTPError):
-                raise  # HTTP errors are not transient — propagate immediately
+            if not _is_retryable(exc):
+                raise
             if attempt == MAX_RETRIES - 1:
                 raise
-            delay = RETRY_DELAYS[attempt]
+            delay = min(BASE_DELAY * (2 ** attempt), MAX_DELAY)
+            jitter = delay * random.uniform(-0.3, 0.3)
+            actual_delay = max(1, delay + jitter)
             print(f"  Retry {attempt + 1}/{MAX_RETRIES} for {description} "
-                  f"in {delay}s ({exc})")
-            time.sleep(delay)
+                  f"in {actual_delay:.0f}s ({exc})")
+            time.sleep(actual_delay)
 
 
 def hetzner_get(path: str) -> dict:
@@ -72,7 +97,7 @@ def hetzner_get(path: str) -> dict:
             f"https://api.hetzner.cloud{path}",
             headers={"Authorization": f"Bearer {HETZNER_TOKEN}"},
         )
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=HETZNER_TIMEOUT) as resp:
             return json.loads(resp.read())
     return _retry(_do, f"GET {path}")
 
@@ -93,11 +118,13 @@ def coroot_request(method: str, path: str, body: dict | None = None) -> dict | N
             headers=headers,
         )
         try:
-            with _opener.open(req, timeout=30) as resp:
+            with _opener.open(req, timeout=COROOT_TIMEOUT) as resp:
                 raw = resp.read()
                 return json.loads(raw) if raw.strip() else None
         except urllib.error.HTTPError as e:
             body_text = e.read().decode(errors="replace").strip()
+            if e.code in RETRYABLE_HTTP_CODES:
+                raise  # let _retry handle 429/5xx
             raise RuntimeError(f"HTTP {e.code} {method} {path}: {body_text}") from e
     return _retry(_do, f"{method} {path}")
 

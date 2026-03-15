@@ -4,6 +4,9 @@ name: Hetzner Price Push
 # pricing and updates Coroot's custom cloud pricing via its project API.
 # Runs directly on the GHA runner — no SSH to VPS required.
 #
+# Resilience: health pre-check skips run if VPS is unreachable,
+# continue-on-error prevents red badge for a non-critical daily sync.
+#
 # Required secrets: HETZNER_TOKEN, COROOT_EMAIL, COROOT_PASSWORD
 # Optional vars:    COROOT_PROJECT (auto-discovered from API if unset)
 
@@ -14,6 +17,9 @@ on:
 
   workflow_dispatch:
 
+env:
+  COROOT_URL: https://table.beerpub.dev
+
 jobs:
   push-prices:
     name: Push Hetzner Prices to Coroot
@@ -22,17 +28,38 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Check VPS reachability
+        id: health
+        run: |
+          if curl -sf --connect-timeout 10 --max-time 15 "$COROOT_URL/" >/dev/null 2>&1; then
+            echo "reachable=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::VPS unreachable at $COROOT_URL — skipping price push"
+            echo "reachable=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Derive and push pricing
+        if: steps.health.outputs.reachable == 'true'
+        continue-on-error: true
+        id: push
         env:
           HETZNER_TOKEN: ${{ secrets.HETZNER_TOKEN }}
           COROOT_EMAIL: ${{ secrets.COROOT_EMAIL }}
           COROOT_PASSWORD: ${{ secrets.COROOT_PASSWORD }}
-          COROOT_URL: https://table.beerpub.dev
           COROOT_PROJECT: ${{ vars.COROOT_PROJECT }}
         run: python3 scripts/push-hz-prices.py
 
       - name: Summary
-        if: success()
+        if: always()
         run: |
-          echo "### Hetzner Prices Updated" >> $GITHUB_STEP_SUMMARY
-          echo "Custom cloud pricing updated in Coroot (project auto-discovered or from \`COROOT_PROJECT\` var)." >> $GITHUB_STEP_SUMMARY
+          if [[ "${{ steps.health.outputs.reachable }}" != "true" ]]; then
+            echo "### Hetzner Price Push Skipped" >> "$GITHUB_STEP_SUMMARY"
+            echo "VPS unreachable — will retry tomorrow." >> "$GITHUB_STEP_SUMMARY"
+          elif [[ "${{ steps.push.outcome }}" == "success" ]]; then
+            echo "### Hetzner Prices Updated" >> "$GITHUB_STEP_SUMMARY"
+            echo "Custom cloud pricing updated in Coroot (project auto-discovered or from \`COROOT_PROJECT\` var)." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### Hetzner Price Push Failed" >> "$GITHUB_STEP_SUMMARY"
+            echo "Pricing step failed after retries — stale prices are acceptable." >> "$GITHUB_STEP_SUMMARY"
+            echo "Check VPS health if this persists." >> "$GITHUB_STEP_SUMMARY"
+          fi
