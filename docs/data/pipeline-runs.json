@@ -1,6 +1,60 @@
 {
-  "generated_at": "2026-03-16T02:35:07Z",
+  "generated_at": "2026-03-16T06:05:38Z",
   "runs": [
+    {
+      "conclusion": "failure",
+      "created_at": "2026-03-16T05:51:06Z",
+      "event": "schedule",
+      "html_url": "https://github.com/atvirokodosprendimai/coroot-cicd/actions/runs/23129905319",
+      "id": 23129905319,
+      "run_number": 8,
+      "status": "completed",
+      "updated_at": "2026-03-16T06:05:30Z",
+      "jobs": [
+        {
+          "completed_at": "2026-03-16T05:51:24Z",
+          "conclusion": "success",
+          "name": "Check for Image Updates",
+          "started_at": "2026-03-16T05:51:08Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-03-16T06:05:18Z",
+          "conclusion": "failure",
+          "name": "Backup Volumes",
+          "started_at": "2026-03-16T05:51:26Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-03-16T06:05:19Z",
+          "conclusion": "skipped",
+          "name": "Staging Validation",
+          "started_at": "2026-03-16T06:05:19Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-03-16T06:05:29Z",
+          "conclusion": "success",
+          "name": "Post-Pipeline Cleanup",
+          "started_at": "2026-03-16T06:05:21Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-03-16T06:05:19Z",
+          "conclusion": "skipped",
+          "name": "Deploy to Production",
+          "started_at": "2026-03-16T06:05:19Z",
+          "status": "completed"
+        },
+        {
+          "completed_at": "2026-03-16T06:05:19Z",
+          "conclusion": "skipped",
+          "name": "Rollback on Failure",
+          "started_at": "2026-03-16T06:05:19Z",
+          "status": "completed"
+        }
+      ]
+    },
     {
       "conclusion": "failure",
       "created_at": "2026-03-09T05:21:24Z",
