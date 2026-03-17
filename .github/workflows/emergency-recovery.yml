@@ -1,0 +1,110 @@
+name: Emergency Recovery
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Recovery action"
+        required: true
+        type: choice
+        options:
+          - cleanup-and-restart
+          - cleanup-only
+          - restart-only
+        default: cleanup-and-restart
+
+env:
+  VPS_HOST: ${{ secrets.VPS_HOST }}
+  SSH_KEY_PATH: /tmp/vps_ssh_key
+
+jobs:
+  recover:
+    name: Emergency Recovery
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup SSH
+        run: |
+          echo "${{ secrets.VPS_SSH_KEY }}" > "$SSH_KEY_PATH"
+          chmod 600 "$SSH_KEY_PATH"
+          mkdir -p ~/.ssh
+          ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Disk cleanup
+        if: inputs.action != 'restart-only'
+        run: |
+          ssh -i "$SSH_KEY_PATH" -o StrictHostKeyChecking=no \
+            root@"$VPS_HOST" 'bash -s' <<'SCRIPT'
+          set -euo pipefail
+          echo "=== BEFORE CLEANUP ==="
+          df -h /
+
+          echo ""
+          echo "=== Removing old backups ==="
+          if [ -d /opt/coroot/backups ]; then
+            du -sh /opt/coroot/backups/ 2>/dev/null || true
+            cd /opt/coroot/backups
+            ls -1t | tail -n +2 | xargs -r rm -rf
+            echo "Kept latest backup only"
+            du -sh /opt/coroot/backups/ 2>/dev/null || true
+          fi
+
+          echo ""
+          echo "=== Removing incomplete backup artifacts ==="
+          find /tmp -name "*.tar.gz" -size +100M -delete 2>/dev/null || true
+          find /opt/coroot -name "*.tar.gz.tmp" -delete 2>/dev/null || true
+
+          echo ""
+          echo "=== Pruning Docker ==="
+          docker system prune -f 2>/dev/null || true
+
+          echo ""
+          echo "=== Cleaning apt cache ==="
+          apt-get clean 2>/dev/null || true
+
+          echo ""
+          echo "=== Cleaning journal logs ==="
+          journalctl --vacuum-size=50M 2>/dev/null || true
+
+          echo ""
+          echo "=== AFTER CLEANUP ==="
+          df -h /
+          SCRIPT
+
+      - name: Restart stack
+        if: inputs.action != 'cleanup-only'
+        run: |
+          ssh -i "$SSH_KEY_PATH" -o StrictHostKeyChecking=no \
+            root@"$VPS_HOST" 'bash -s' <<'SCRIPT'
+          set -euo pipefail
+          echo "=== Restarting Coroot stack ==="
+          cd /opt/coroot
+          docker compose up -d
+
+          echo ""
+          echo "=== Waiting for health checks (120s max) ==="
+          for i in $(seq 1 24); do
+            sleep 5
+            healthy=$(docker ps --format '{{.Names}} {{.Status}}' | grep -c "healthy" || true)
+            total=$(docker compose ps --format '{{.Name}}' | wc -l)
+            echo "  Check $i/24: $healthy healthy containers out of $total"
+            coroot_status=$(docker inspect --format='{{.State.Health.Status}}' coroot-coroot-1 2>/dev/null || echo "unknown")
+            echo "  Coroot: $coroot_status"
+            if [ "$coroot_status" = "healthy" ]; then
+              echo ""
+              echo "Coroot is healthy!"
+              break
+            fi
+          done
+
+          echo ""
+          echo "=== Final container status ==="
+          docker ps -a --format "table {{.Names}}	{{.Status}}	{{.Image}}"
+
+          echo ""
+          echo "=== External health check ==="
+          curl -sf -o /dev/null -w "HTTP %{http_code}" https://table.beerpub.dev/ || echo "Still returning error"
+          SCRIPT
+
+      - name: Cleanup SSH key
+        if: always()
+        run: rm -f "$SSH_KEY_PATH"
