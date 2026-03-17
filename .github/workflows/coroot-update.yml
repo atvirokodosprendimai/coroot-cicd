@@ -118,13 +118,13 @@ jobs:
           ssh-keyscan -H ${{ env.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
 
       - name: Skip check
-        if: inputs.skip_backup == 'true'
+        if: inputs.skip_backup == true || inputs.skip_backup == 'true'
         run: |
           echo "### Backup Skipped" >> $GITHUB_STEP_SUMMARY
           echo "Backup was skipped by user request." >> $GITHUB_STEP_SUMMARY
 
       - name: Backup all volumes
-        if: inputs.skip_backup != 'true'
+        if: inputs.skip_backup != true && inputs.skip_backup != 'true'
         run: |
           DRY_RUN_FLAG=""
           if [[ "${{ inputs.dry_run }}" == "true" ]]; then
@@ -144,7 +144,7 @@ jobs:
           fi
 
       - name: Sync backup to Hetzner Storage Box
-        if: inputs.skip_backup != 'true'
+        if: inputs.skip_backup != true && inputs.skip_backup != 'true'
         continue-on-error: true
         run: |
           DRY_RUN_FLAG=""
@@ -182,13 +182,13 @@ jobs:
           ssh-keyscan -H ${{ env.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
 
       - name: Skip check
-        if: inputs.skip_staging == 'true'
+        if: inputs.skip_staging == true || inputs.skip_staging == 'true'
         run: |
           echo "### Staging Skipped" >> $GITHUB_STEP_SUMMARY
           echo "Staging validation was skipped by user request." >> $GITHUB_STEP_SUMMARY
 
       - name: Upload staging compose file
-        if: inputs.skip_staging != 'true'
+        if: inputs.skip_staging != true && inputs.skip_staging != 'true'
         run: |
           ssh -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no \
             root@${{ env.VPS_HOST }} 'mkdir -p /opt/coroot-staging'
@@ -197,7 +197,7 @@ jobs:
             root@${{ env.VPS_HOST }}:/opt/coroot-staging/docker-compose.staging.yml
 
       - name: Deploy to staging
-        if: inputs.skip_staging != 'true'
+        if: inputs.skip_staging != true && inputs.skip_staging != 'true'
         run: |
           DRY_RUN_FLAG=""
           if [[ "${{ inputs.dry_run }}" == "true" ]]; then
