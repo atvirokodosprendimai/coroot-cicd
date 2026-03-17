@@ -8,11 +8,6 @@ on:
         required: false
         default: "true"
         type: boolean
-      run_recovery:
-        description: "Run emergency disk cleanup and restart stack"
-        required: false
-        default: "false"
-        type: boolean
 
 env:
   VPS_HOST: ${{ secrets.VPS_HOST }}
@@ -52,24 +47,31 @@ jobs:
           HETZNER_TOKEN: ${{ secrets.HETZNER_ADMIN_TOKEN }}
         run: |
           echo "SSH unreachable — finding server via Hetzner API..."
+
+          # Find server by IP
           servers_json=$(curl -sf -H "Authorization: Bearer $HETZNER_TOKEN" \
             "https://api.hetzner.cloud/v1/servers")
+
           server_id=$(echo "$servers_json" | python3 -c "
           import json, sys
           data = json.load(sys.stdin)
           for s in data['servers']:
               ip = s['public_net']['ipv4']['ip']
               print(f\"  Found: {s['name']} (id={s['id']}, ip={ip})\", file=sys.stderr)
+              # We don't know the exact IP from the secret, so take the first server
+              # For single-server setups this is correct
+          # Print the first server ID
           if data['servers']:
               print(data['servers'][0]['id'])
           ")
+
           if [ -z "$server_id" ]; then
             echo "ERROR: No servers found in Hetzner account"
             exit 1
           fi
+
           echo "Requesting hard reset for server ID $server_id..."
-          reboot_resp=$(curl -s -w "
-HTTP_CODE:%{http_code}" -X POST \
+          reboot_resp=$(curl -s -w "\nHTTP_CODE:%{http_code}" -X POST \
             -H "Authorization: Bearer $HETZNER_TOKEN" \
             "https://api.hetzner.cloud/v1/servers/$server_id/actions/reset")
           http_code=$(echo "$reboot_resp" | grep "HTTP_CODE:" | cut -d: -f2)
@@ -80,13 +82,17 @@ HTTP_CODE:%{http_code}" -X POST \
             echo "ERROR: Hetzner API returned $http_code"
             exit 1
           fi
+
           echo "rebooted=true" >> "$GITHUB_OUTPUT"
           echo "Waiting 60s for server to come back..."
           sleep 60
+
+          # Wait for SSH to become available (up to 3 min)
           for i in $(seq 1 12); do
             if ssh -i "$SSH_KEY_PATH" -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
               -o BatchMode=yes root@"$VPS_HOST" 'echo ok' 2>/dev/null; then
               echo "Server is back after reboot"
+              # Re-scan host keys after reboot
               ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
               break
             fi
@@ -94,79 +100,8 @@ HTTP_CODE:%{http_code}" -X POST \
             sleep 15
           done
 
-      - name: Emergency disk cleanup and restart
-        if: (steps.ssh_test.outputs.ssh_ok == 'true' || steps.reboot.outputs.rebooted == 'true') && inputs.run_recovery
-        run: |
-          ssh -i "$SSH_KEY_PATH" -o StrictHostKeyChecking=no -o ConnectTimeout=30 \
-            root@"$VPS_HOST" 'bash -s' <<'RECOVERY'
-          set +e
-          echo "=== BEFORE CLEANUP ==="
-          df -h /
-          echo ""
-
-          echo "=== Removing ALL backups ==="
-          rm -rf /opt/coroot/backups/*
-          echo "Done"
-          echo ""
-
-          echo "=== Removing staging leftovers ==="
-          rm -rf /opt/coroot-staging 2>/dev/null
-          echo ""
-
-          echo "=== Removing temp artifacts ==="
-          find /tmp -name "*.tar.gz" -delete 2>/dev/null
-          find /opt -name "*.tar.gz.tmp" -delete 2>/dev/null
-          echo ""
-
-          echo "=== Removing orphan Docker volumes ==="
-          for vol in coroot_coroot-data coroot_caddy-data coroot_caddy-config; do
-            docker volume rm "$vol" 2>/dev/null && echo "Removed: $vol" || true
-          done
-          echo ""
-
-          echo "=== Pruning Docker system ==="
-          docker system prune -af 2>/dev/null
-          echo ""
-
-          echo "=== Cleaning system ==="
-          apt-get clean 2>/dev/null
-          journalctl --vacuum-size=50M 2>/dev/null
-          find /var/log -name "*.gz" -delete 2>/dev/null
-          find /var/log -name "*.old" -delete 2>/dev/null
-          find /var/log -name "*.1" -delete 2>/dev/null
-          echo ""
-
-          echo "=== AFTER CLEANUP ==="
-          df -h /
-          echo ""
-
-          echo "=== Restarting Coroot stack ==="
-          cd /opt/coroot
-          docker compose pull 2>&1 || echo "Pull failed, using cached images"
-          docker compose up -d
-
-          echo ""
-          echo "=== Waiting for health (180s max) ==="
-          for i in $(seq 1 36); do
-            sleep 5
-            cs=$(docker inspect --format='{{.State.Health.Status}}' coroot-coroot-1 2>/dev/null || echo "?")
-            ch=$(docker inspect --format='{{.State.Health.Status}}' coroot-clickhouse-1 2>/dev/null || echo "?")
-            pr=$(docker inspect --format='{{.State.Health.Status}}' coroot-prometheus-1 2>/dev/null || echo "?")
-            echo "  [$i/36] coroot=$cs clickhouse=$ch prometheus=$pr"
-            [ "$cs" = "healthy" ] && echo "RECOVERED!" && break
-          done
-
-          echo ""
-          docker ps -a --format "table {{.Names}}	{{.Status}}	{{.Image}}"
-          echo ""
-          df -h /
-          echo ""
-          curl -sf -o /dev/null -w "External check: HTTP %{http_code}
-" https://table.beerpub.dev/ || echo "External check: still failing"
-          RECOVERY
-
       - name: Run diagnostics
-        if: (steps.ssh_test.outputs.ssh_ok == 'true' || steps.reboot.outputs.rebooted == 'true') && !inputs.run_recovery
+        if: steps.ssh_test.outputs.ssh_ok == 'true' || steps.reboot.outputs.rebooted == 'true'
         run: |
           ssh -i "$SSH_KEY_PATH" -o StrictHostKeyChecking=no -o ConnectTimeout=30 \
             root@"$VPS_HOST" 'bash -s' <<'DIAG'
@@ -175,54 +110,66 @@ HTTP_CODE:%{http_code}" -X POST \
           uname -a
           uptime
           echo ""
+
           echo "=== MEMORY ==="
           free -h
           echo ""
+
           echo "=== DISK ==="
           df -h
           echo ""
+
           echo "=== OOM KILLER HISTORY ==="
           dmesg 2>/dev/null | grep -i "oom\|out of memory\|killed process" | tail -30 || journalctl -k --no-pager 2>/dev/null | grep -i "oom\|out of memory\|killed process" | tail -30 || echo "no oom entries found"
           echo ""
+
           echo "=== DOCKER STATS ==="
-          docker stats --no-stream --format "table {{.Name}}	{{.CPUPerc}}	{{.MemUsage}}	{{.MemPerc}}	{{.NetIO}}	{{.BlockIO}}" 2>/dev/null || echo "docker stats failed"
+          docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}\t{{.NetIO}}\t{{.BlockIO}}" 2>/dev/null || echo "docker stats failed"
           echo ""
+
           echo "=== DOCKER PS ==="
-          docker ps -a --format "table {{.Names}}	{{.Status}}	{{.Image}}" 2>/dev/null || echo "docker ps failed"
+          docker ps -a --format "table {{.Names}}\t{{.Status}}\t{{.Image}}" 2>/dev/null || echo "docker ps failed"
           echo ""
+
           echo "=== DOCKER DISK USAGE ==="
           docker system df -v 2>/dev/null || echo "docker system df failed"
           echo ""
+
           echo "=== PRODUCTION DOCKER-COMPOSE.YML ==="
           cat /opt/coroot/docker-compose.yml 2>/dev/null || echo "file not found"
           echo ""
+
           echo "=== PRODUCTION CADDYFILE ==="
           cat /opt/coroot/Caddyfile 2>/dev/null || echo "file not found"
           echo ""
+
           echo "=== RECENT COROOT LOGS ==="
           docker compose -p coroot -f /opt/coroot/docker-compose.yml logs --tail 50 coroot 2>/dev/null || echo "no logs"
           echo ""
+
           echo "=== RECENT CLICKHOUSE LOGS ==="
           docker compose -p coroot -f /opt/coroot/docker-compose.yml logs --tail 50 clickhouse 2>/dev/null || echo "no logs"
           echo ""
+
           echo "=== RECENT PROMETHEUS LOGS ==="
           docker compose -p coroot -f /opt/coroot/docker-compose.yml logs --tail 50 prometheus 2>/dev/null || echo "no logs"
           echo ""
+
           echo "=== RECENT CADDY LOGS ==="
           docker compose -p coroot -f /opt/coroot/docker-compose.yml logs --tail 30 caddy 2>/dev/null || echo "no logs"
           echo ""
+
           echo "=== DOCKER EVENTS (LAST 24H) ==="
           docker events --since 24h --until 0s --format '{{.Time}} {{.Type}} {{.Action}} {{.Actor.Attributes.name}}' 2>/dev/null | tail -50 || echo "docker events failed"
           echo ""
+
           echo "=== SWAP ==="
           swapon --show 2>/dev/null || echo "no swap"
           echo ""
+
           echo "=== TOP MEMORY CONSUMERS ==="
           ps aux --sort=-%mem | head -15
           echo ""
+
           echo "=== DIAGNOSTICS COMPLETE ==="
           DIAG
-
-      - name: Cleanup SSH key
-        if: always()
-        run: rm -f "$SSH_KEY_PATH"
