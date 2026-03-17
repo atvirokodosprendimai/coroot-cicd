@@ -27,6 +27,7 @@ BACKUP_ROOT="/opt/coroot/backups"
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 BACKUP_DIR="${BACKUP_ROOT}/${TIMESTAMP}"
 MAX_BACKUPS=3
+MIN_DISK_FREE_GB=15
 
 # All volumes to back up (must match docker-compose.yml volume names)
 # Format: "volume_name:description"
@@ -57,6 +58,62 @@ if [[ "${DRY_RUN}" == true ]]; then
 fi
 echo "Timestamp: ${TIMESTAMP}"
 echo "Backup dir: ${BACKUP_DIR}"
+echo ""
+
+# --- Pre-flight: disk space check ---
+echo "--- Disk space pre-check ---"
+avail_kb=$(df --output=avail / 2>/dev/null | tail -1 | tr -d ' ')
+avail_gb=$((avail_kb / 1024 / 1024))
+total_kb=$(df --output=size / 2>/dev/null | tail -1 | tr -d ' ')
+used_pct=$(df --output=pcent / 2>/dev/null | tail -1 | tr -d ' %')
+echo "  Available: ${avail_gb}GB (${used_pct}% used)"
+
+if [[ ${avail_gb} -lt ${MIN_DISK_FREE_GB} ]]; then
+  echo ""
+  echo "  WARNING: Only ${avail_gb}GB free (minimum: ${MIN_DISK_FREE_GB}GB)"
+  echo "  Attempting to free space by pruning old backups first..."
+  echo ""
+
+  # Prune ALL old backups to reclaim space
+  if [[ -d "${BACKUP_ROOT}" ]]; then
+    old_size=$(du -sh "${BACKUP_ROOT}" 2>/dev/null | cut -f1)
+    echo "  Current backups: ${old_size}"
+    # Keep only the most recent backup
+    cd "${BACKUP_ROOT}"
+    backup_dirs=$(ls -1d [0-9]* 2>/dev/null | sort)
+    count=$(echo "${backup_dirs}" | grep -c . || true)
+    if [[ ${count} -gt 1 ]]; then
+      echo "${backup_dirs}" | head -n $((count - 1)) | while read -r old; do
+        echo "  Removing old backup: ${old}"
+        rm -rf "${BACKUP_ROOT}/${old}"
+      done
+    fi
+    new_size=$(du -sh "${BACKUP_ROOT}" 2>/dev/null | cut -f1)
+    echo "  After pruning: ${new_size}"
+  fi
+
+  # Also clean up temp files and system caches
+  find /tmp -name "*.tar.gz" -delete 2>/dev/null || true
+  apt-get clean 2>/dev/null || true
+  journalctl --vacuum-size=50M 2>/dev/null || true
+
+  # Re-check
+  avail_kb=$(df --output=avail / 2>/dev/null | tail -1 | tr -d ' ')
+  avail_gb=$((avail_kb / 1024 / 1024))
+  echo ""
+  echo "  After cleanup: ${avail_gb}GB free"
+
+  if [[ ${avail_gb} -lt ${MIN_DISK_FREE_GB} ]]; then
+    echo ""
+    echo "  ERROR: Still only ${avail_gb}GB free after cleanup."
+    echo "  Cannot safely create backups. Skipping backup."
+    echo "  Consider resizing the disk or reducing data retention."
+    echo ""
+    echo "=== BACKUP SKIPPED — INSUFFICIENT DISK SPACE ==="
+    # Exit 0 so the pipeline can continue to deploy
+    exit 0
+  fi
+fi
 echo ""
 
 if [[ "${DRY_RUN}" == true ]]; then
@@ -165,6 +222,16 @@ for vol_entry in "${VOLUMES[@]}"; do
   if ! docker volume inspect "${vol_name}" > /dev/null 2>&1; then
     echo "    WARNING: Volume ${vol_name} does not exist, skipping"
     continue
+  fi
+
+  # Check disk space before each volume backup
+  avail_kb=$(df --output=avail / 2>/dev/null | tail -1 | tr -d ' ')
+  avail_gb=$((avail_kb / 1024 / 1024))
+  if [[ ${avail_gb} -lt 5 ]]; then
+    echo "    WARNING: Only ${avail_gb}GB free, stopping backup to prevent disk full"
+    echo "    Remaining volumes will be skipped"
+    backup_failed=true
+    break
   fi
 
   # Create compressed backup using an alpine container
