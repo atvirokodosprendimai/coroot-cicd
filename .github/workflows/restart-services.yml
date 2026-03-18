@@ -32,35 +32,10 @@ jobs:
           ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
 
       - name: Restart service
-        env:
-          SERVICE: ${{ inputs.service }}
         run: |
+          SERVICE="${{ inputs.service }}"
           ssh -i "$SSH_KEY_PATH" -o StrictHostKeyChecking=no -o ConnectTimeout=30 \
-            root@"$VPS_HOST" "bash -s" <<'SCRIPT'
-          set +e
-          cd /opt/coroot
-
-          echo "=== BEFORE ==="
-          docker ps --format "table {{.Names}}\t{{.Status}}" | grep -E "coroot|caddy|click|prom"
-
-          if [ "$SERVICE" = "all" ]; then
-            echo "Restarting all services..."
-            docker compose restart
-          else
-            echo "Restarting $SERVICE..."
-            docker compose restart "$SERVICE"
-          fi
-
-          echo "Waiting 30s for services to stabilize..."
-          sleep 30
-
-          echo "=== AFTER ==="
-          docker ps --format "table {{.Names}}\t{{.Status}}" | grep -E "coroot|caddy|click|prom"
-
-          echo "=== HEALTH CHECK ==="
-          curl -sf -o /dev/null -w "table.beerpub.dev: HTTP %{http_code}\n" https://table.beerpub.dev/ || echo "table.beerpup.dev: FAIL"
-          curl -sf -o /dev/null -w "coroot.beerpub.dev: HTTP %{http_code}\n" https://coroot.beerpub.dev/ || echo "coroot.beerpub.dev: FAIL"
-          SCRIPT
+            root@"$VPS_HOST" "cd /opt/coroot && docker ps --format 'table {{.Names}}\t{{.Status}}' | grep -E 'coroot|caddy|click|prom' && echo '=== RESTARTING $SERVICE ===' && docker compose restart $SERVICE && echo 'Waiting 30s...' && sleep 30 && docker ps --format 'table {{.Names}}\t{{.Status}}' | grep -E 'coroot|caddy|click|prom' && echo '=== HEALTH ===' && curl -sf -o /dev/null -w 'coroot.beerpub.dev: HTTP %{http_code}\n' https://coroot.beerpub.dev/ || echo 'coroot.beerpub.dev: FAIL'"
 
       - name: Cleanup SSH
         if: always()
