@@ -1,0 +1,67 @@
+name: Restart Services
+
+on:
+  workflow_dispatch:
+    inputs:
+      service:
+        description: "Service to restart (all, coroot, clickhouse, prometheus, caddy)"
+        required: true
+        default: "all"
+        type: choice
+        options:
+          - all
+          - coroot
+          - clickhouse
+          - prometheus
+          - caddy
+
+env:
+  VPS_HOST: ${{ secrets.VPS_HOST }}
+  SSH_KEY_PATH: /tmp/vps_ssh_key
+
+jobs:
+  restart:
+    name: Restart ${{ inputs.service }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup SSH
+        run: |
+          echo "${{ secrets.VPS_SSH_KEY }}" > "$SSH_KEY_PATH"
+          chmod 600 "$SSH_KEY_PATH"
+          mkdir -p ~/.ssh
+          ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Restart service
+        env:
+          SERVICE: ${{ inputs.service }}
+        run: |
+          ssh -i "$SSH_KEY_PATH" -o StrictHostKeyChecking=no -o ConnectTimeout=30 \
+            root@"$VPS_HOST" "bash -s" <<'SCRIPT'
+          set +e
+          cd /opt/coroot
+
+          echo "=== BEFORE ==="
+          docker ps --format "table {{.Names}}\t{{.Status}}" | grep -E "coroot|caddy|click|prom"
+
+          if [ "$SERVICE" = "all" ]; then
+            echo "Restarting all services..."
+            docker compose restart
+          else
+            echo "Restarting $SERVICE..."
+            docker compose restart "$SERVICE"
+          fi
+
+          echo "Waiting 30s for services to stabilize..."
+          sleep 30
+
+          echo "=== AFTER ==="
+          docker ps --format "table {{.Names}}\t{{.Status}}" | grep -E "coroot|caddy|click|prom"
+
+          echo "=== HEALTH CHECK ==="
+          curl -sf -o /dev/null -w "table.beerpub.dev: HTTP %{http_code}\n" https://table.beerpub.dev/ || echo "table.beerpup.dev: FAIL"
+          curl -sf -o /dev/null -w "coroot.beerpub.dev: HTTP %{http_code}\n" https://coroot.beerpub.dev/ || echo "coroot.beerpub.dev: FAIL"
+          SCRIPT
+
+      - name: Cleanup SSH
+        if: always()
+        run: rm -f "$SSH_KEY_PATH"
