@@ -34,6 +34,7 @@ on:
 env:
   VPS_HOST: ${{ secrets.VPS_HOST }}
   SSH_KEY_PATH: /tmp/vps_ssh_key
+  SSH_OPTS: "-i /tmp/vps_ssh_key -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=40"
 
 jobs:
   check-updates:
@@ -62,7 +63,7 @@ jobs:
             DRY_RUN_FLAG="--dry-run"
           fi
 
-          result=$(ssh -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no \
+          result=$(ssh ${{ env.SSH_OPTS }} \
             root@${{ env.VPS_HOST }} 'bash -s -- '"${DRY_RUN_FLAG}" < scripts/check-updates.sh 2>&1) || exit_code=$?
 
           echo "${result}"
@@ -132,7 +133,7 @@ jobs:
           fi
 
           echo "Starting volume backup..."
-          ssh -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no \
+          ssh ${{ env.SSH_OPTS }} \
             root@${{ env.VPS_HOST }} 'bash -s -- '"${DRY_RUN_FLAG}" < scripts/backup-volumes.sh
 
           if [[ "${{ inputs.dry_run }}" == "true" ]]; then
@@ -154,7 +155,7 @@ jobs:
 
           # Remote sync is best-effort — failure should not block the pipeline.
           # The script reads STORAGEBOX_* vars from /etc/coroot-backup.conf on the VPS.
-          ssh -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no \
+          ssh ${{ env.SSH_OPTS }} \
             root@${{ env.VPS_HOST }} 'bash -s -- '"${DRY_RUN_FLAG}" < scripts/sync-remote-backup.sh && {
             echo "### Remote Backup Sync: OK" >> $GITHUB_STEP_SUMMARY
           } || {
@@ -190,9 +191,9 @@ jobs:
       - name: Upload staging compose file
         if: inputs.skip_staging != true && inputs.skip_staging != 'true'
         run: |
-          ssh -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no \
+          ssh ${{ env.SSH_OPTS }} \
             root@${{ env.VPS_HOST }} 'mkdir -p /opt/coroot-staging'
-          scp -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no \
+          scp ${{ env.SSH_OPTS }} \
             docker-compose.staging.yml \
             root@${{ env.VPS_HOST }}:/opt/coroot-staging/docker-compose.staging.yml
 
@@ -204,7 +205,7 @@ jobs:
             DRY_RUN_FLAG="--dry-run"
           fi
 
-          ssh -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no \
+          ssh ${{ env.SSH_OPTS }} \
             root@${{ env.VPS_HOST }} 'bash -s -- '"${DRY_RUN_FLAG}" < scripts/deploy-staging.sh
 
           if [[ "${{ inputs.dry_run }}" == "true" ]]; then
@@ -218,7 +219,7 @@ jobs:
       - name: Cleanup staging on failure
         if: failure()
         run: |
-          ssh -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no \
+          ssh ${{ env.SSH_OPTS }} \
             root@${{ env.VPS_HOST }} \
             'docker compose -p coroot-staging -f /opt/coroot-staging/docker-compose.staging.yml down -v 2>/dev/null || true'
 
@@ -251,7 +252,7 @@ jobs:
             DRY_RUN_FLAG="--dry-run"
           fi
 
-          ssh -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no \
+          ssh ${{ env.SSH_OPTS }} \
             root@${{ env.VPS_HOST }} 'bash -s -- '"${DRY_RUN_FLAG}" < scripts/deploy-production.sh
 
       - name: Deployment success summary
@@ -293,7 +294,7 @@ jobs:
         id: rollback_exec
         run: |
           echo "Production deployment failed. Initiating rollback..."
-          ssh -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no \
+          ssh ${{ env.SSH_OPTS }} \
             root@${{ env.VPS_HOST }} 'bash -s' < scripts/rollback.sh
 
       - name: Rollback summary
@@ -340,7 +341,7 @@ jobs:
 
       - name: Cleanup VPS
         run: |
-          ssh -i ${{ env.SSH_KEY_PATH }} -o StrictHostKeyChecking=no -o ServerAliveInterval=30 \
+          ssh ${{ env.SSH_OPTS }} \
             root@${{ env.VPS_HOST }} 'bash -s' <<'CLEANUP'
           set +e
           echo "=== Removing all backups ==="

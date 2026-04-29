@@ -26,6 +26,7 @@ on:
 env:
   VPS_HOST: ${{ secrets.VPS_HOST }}
   SSH_KEY_PATH: /tmp/vps_ssh_key
+  SSH_OPTS: "-i /tmp/vps_ssh_key -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=40"
 
 jobs:
   restart:
